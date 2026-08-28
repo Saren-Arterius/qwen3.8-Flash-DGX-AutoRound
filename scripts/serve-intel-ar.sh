@@ -26,6 +26,10 @@ MTP="${MTP:-2}"
 PREWARM="${PREWARM:-1}"
 TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 EXTRA="${EXTRA:-}"
+# KV_BYTES: size the KV cache explicitly (e.g. 13.2g) instead of by
+# gpu-memory-utilization fraction — deterministic footprint on unified-memory
+# boxes where "free memory" profiling is unreliable. Pair with a tiny GPU_MEM.
+[ -n "${KV_BYTES:-}" ] && EXTRA="--kv-cache-memory-bytes $KV_BYTES $EXTRA"
 
 # PLE gather = CPU op + H2D copy: must run OUTSIDE CUDA graphs.
 SPLIT='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
