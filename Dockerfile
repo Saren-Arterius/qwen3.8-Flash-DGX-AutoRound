@@ -63,3 +63,20 @@ RUN cp ${MODEL_PY} ${MODEL_PY}.orig && cp ${MTP_PY} ${MTP_PY}.orig \
  && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n                    prefix=maybe_prefix(prefix, "lm_head"),|' ${MTP_PY} \
  && grep -c 'quant_config=vllm_config.quant_config' ${MODEL_PY} ${MTP_PY} \
  && python3 -c "import ast; [ast.parse(open(p).read()) for p in ('${MODEL_PY}','${MTP_PY}')]; print('lm_head patched OK in model.py + mtp.py')"
+
+# mamba align-mode state-copy hardening (the "Xid 31 / illegal memory access
+# under load" crash with PREFIX_CACHE=1 + MTP — also blazux/qwen3.8-Flash-DGX#2):
+# CUDA_LAUNCH_BLOCKING=1 caught the fault synchronously inside vLLM's
+# precopy_mamba_align_fused_kernel reading a wild address derived from a bad
+# block id. src/mamba_utils_guarded.py is the image's stock
+# vllm/v1/worker/mamba_utils.py plus:
+#   1. upstream a02cfccbc6 "[Bugfix][Mamba] Fix overlapping state copy race"
+#      (vllm#50729, landed after this image's vLLM snapshot)
+#   2. a bounds guard in _copy_mamba_state_block: block ids are validated
+#      against each state pool before dereferencing; an out-of-range id skips
+#      the copy and bumps a counter (logged as "mamba state-copy guard")
+#      instead of taking down the CUDA context.
+ARG MAMBA_UTILS=${SP}/vllm/v1/worker/mamba_utils.py
+RUN cp ${MAMBA_UTILS} ${MAMBA_UTILS}.orig
+COPY src/mamba_utils_guarded.py ${MAMBA_UTILS}
+RUN python3 -c "import ast; ast.parse(open('${MAMBA_UTILS}').read()); print('mamba_utils.py guarded OK')"
