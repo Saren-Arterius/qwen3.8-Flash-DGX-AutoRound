@@ -62,6 +62,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
   -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
+  -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
   -e VLLM_PLE_MMAP_DIR=/ple-table \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \

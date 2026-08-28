@@ -121,11 +121,23 @@ class MmapPleTable:
         self.paths: list[str | None] = [None] * (max(shards) + 1)
         self.mm: list[np.memmap | None] = [None] * (max(shards) + 1)
         self.rows_total = 0
+        # VLLM_PLE_MMAP_MADV_RANDOM=1: advise the kernel the gathers are
+        # random access, disabling readahead/fault-around on these mappings.
+        # Worth it when the table can't fit in page cache (e.g. remote-RAM
+        # backing on a memory-tight box) — each miss then pulls one page
+        # instead of a readahead window of mostly-evicted-later pages.
+        # Default off: with local NVMe and cache headroom, readahead helps.
+        # Note it also makes VLLM_PLE_MMAP_PREWARM's sequential pass slower.
+        madv_random = _env_int("VLLM_PLE_MMAP_MADV_RANDOM", 0)
         for idx, (path, offset, rows) in shards.items():
             self.paths[idx] = path
             self.mm[idx] = np.memmap(
                 path, dtype=np.uint8, mode="r", offset=offset, shape=(rows, row_bytes)
             )
+            if madv_random:
+                import mmap as _mmap
+
+                self.mm[idx]._mmap.madvise(_mmap.MADV_RANDOM)
             self.rows_total += rows
         self.pool = ThreadPoolExecutor(max_workers=max(1, int(workers)))
         self.fast_rows = _env_int("VLLM_PLE_MMAP_FAST_ROWS", 512)
