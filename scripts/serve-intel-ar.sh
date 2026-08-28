@@ -63,6 +63,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
   -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+  -e CUDA_LAUNCH_BLOCKING="${CUDA_LAUNCH_BLOCKING:-0}" \
   "$IMAGE" \
   /model --served-model-name "${SERVED_NAME:-qwen3.8-flash-next}" \
     --host 0.0.0.0 --port 8000 --load-format "${LOAD_FORMAT:-fastsafetensors}" \
