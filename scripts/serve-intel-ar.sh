@@ -24,6 +24,7 @@ SEQS="${SEQS:-8}"
 GPU_MEM="${GPU_MEM:-0.85}"
 MTP="${MTP:-2}"
 PREWARM="${PREWARM:-1}"
+TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 EXTRA="${EXTRA:-}"
 
 # PLE gather = CPU op + H2D copy: must run OUTSIDE CUDA graphs.
@@ -71,7 +72,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --no-enable-flashinfer-autotune \
     --kv-cache-dtype auto \
     $EXTRA \
-    --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
+    --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
 echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM)"
