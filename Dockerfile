@@ -44,3 +44,12 @@ RUN printf '\n\n# --- qwen38-flash-dgx: int4+fp8 hybrid dispatch (VLLM_FP8_HYBRI
 COPY src/patch_never_evict.py /tmp/patch_never_evict.py
 RUN python3 /tmp/patch_never_evict.py && rm /tmp/patch_never_evict.py
 
+# Let the LM head pick up the checkpoint's quantization (int8 GPTQ head):
+# upstream constructs ParallelLMHead without quant_config, forcing bf16.
+ARG MODEL_PY=${SP}/vllm/models/qwen3_8_flash_next/nvidia/model.py
+ARG MTP_PY=${SP}/vllm/models/qwen3_8_flash_next/nvidia/mtp.py
+RUN cp ${MODEL_PY} ${MODEL_PY}.orig && cp ${MTP_PY} ${MTP_PY}.orig \
+ && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n            prefix=maybe_prefix(prefix, "lm_head"),|' ${MODEL_PY} \
+ && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n                    prefix=maybe_prefix(prefix, "lm_head"),|' ${MTP_PY} \
+ && grep -c 'quant_config=vllm_config.quant_config' ${MODEL_PY} ${MTP_PY} \
+ && python3 -c "import ast; [ast.parse(open(p).read()) for p in ('${MODEL_PY}','${MTP_PY}')]; print('lm_head patched OK in model.py + mtp.py')"
