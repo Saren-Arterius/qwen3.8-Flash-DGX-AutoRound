@@ -31,6 +31,16 @@ ARG FLA_UTILS=${SP}/vllm/third_party/flash_linear_attention/ops/utils.py
 RUN sed -i 's|DEFAULT = 102400|DEFAULT = 101376  # spark-fla-shmem: GB10 99KiB = ADA, big GDN tiles fit|' ${FLA_UTILS} \
  && grep -q "spark-fla-shmem" ${FLA_UTILS} && echo "fla shmem gate patched"
 
+# spark-fla-warps (fla-org/flash-linear-attention#953): the chunked delta-rule
+# state kernel races on Blackwell when autotune picks num_warps=4 — a tl.dot
+# recurrence race yielding nondeterministic h/v_new, i.e. corrupt GDN state.
+# The USE_INITIAL_STATE (prefix-cache resume) variant autotunes separately, so
+# corruption tracks the cached-block path. Upstream pins num_warps=2 on
+# Blackwell; this image only ever runs on GB10, so pin unconditionally.
+ARG FLA_CDH=${SP}/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
+RUN sed -i 's|for num_warps in \[2, 4\]|for num_warps in [2]  # spark-fla-warps: fla#953 Blackwell tl.dot race|' ${FLA_CDH} \
+ && grep -q "spark-fla-warps" ${FLA_CDH} && echo "fla num_warps pinned"
+
 # int4+fp8 hybrid: dispatch blockwise-fp8 side layers from AutoGPTQConfig
 # (no-op unless VLLM_FP8_HYBRID=1 at runtime).
 ARG GPTQ_PY=${SP}/vllm/model_executor/layers/quantization/auto_gptq.py
