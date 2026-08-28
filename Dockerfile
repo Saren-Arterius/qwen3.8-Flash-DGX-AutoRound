@@ -23,3 +23,11 @@ COPY src/vllm_ple_mmap.py ${SP}/vllm_ple_mmap.py
 RUN cp ${PLE} ${PLE}.orig \
  && printf '\n\n# --- qwen38-flash-dgx: serve the PLE n-gram table from disk (VLLM_PLE_MMAP=1) ---\nfrom vllm_ple_mmap import apply as _ple_mmap_apply\n_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)\n' >> ${PLE} \
  && python3 -c "import ast; ast.parse(open('${PLE}').read()); print('ple_layer.py patched OK')"
+
+# spark-fla-shmem (from Saren's 122B recipe): sm121 reports 99 KiB shared mem
+# (= ADA, where big tiles fit) but the FLA gate demands 100 KiB -> the 36 GDN
+# layers run small Triton tiles. Lower the gate so GB10 gets big tiles.
+ARG FLA_UTILS=${SP}/vllm/third_party/flash_linear_attention/ops/utils.py
+RUN sed -i 's|DEFAULT = 102400|DEFAULT = 101376  # spark-fla-shmem: GB10 99KiB = ADA, big GDN tiles fit|' ${FLA_UTILS} \
+ && grep -q "spark-fla-shmem" ${FLA_UTILS} && echo "fla shmem gate patched"
+
