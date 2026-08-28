@@ -97,4 +97,43 @@ except IndexError:
 
 t.prewarm()
 print("prewarm: OK")
+
+# --- BF16 table (no weight_scale), as in the bf16/AutoRound checkpoints ---
+table16 = torch.randn(ROWS, COLS, dtype=torch.bfloat16)
+raw16 = table16.view(torch.uint8).numpy().reshape(ROWS, COLS * 2)
+tmp2 = tempfile.mkdtemp()
+file_of = {}
+for fi in range(2):
+    tensors = {"dummy.weight": np.arange(37, dtype=np.float32).tobytes()}
+    header = {"dummy.weight": {"dtype": "F32", "shape": [37], "data_offsets": [0, 37 * 4]}}
+    off = 37 * 4
+    for si in range(fi * 4, fi * 4 + 4):
+        rows = raw16[si * shard_size : (si + 1) * shard_size]
+        name = f"model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{si}.weight"
+        header[name] = {"dtype": "BF16", "shape": [rows.shape[0], COLS], "data_offsets": [off, off + rows.nbytes]}
+        tensors[name] = rows.tobytes()
+        off += rows.nbytes
+        file_of[name] = f"model-16-0000{fi}.safetensors"
+    hb = json.dumps(header).encode()
+    with open(os.path.join(tmp2, f"model-16-0000{fi}.safetensors"), "wb") as f:
+        f.write(struct.pack("<Q", len(hb)))
+        f.write(hb)
+        for name in header:
+            f.write(tensors[name])
+with open(os.path.join(tmp2, "model.safetensors.index.json"), "w") as f:
+    json.dump({"weight_map": file_of}, f)
+
+shards16, dtype16, scale16 = m._find_shards(tmp2, 1)
+cols16 = shards16.pop("__cols__")
+assert dtype16 == "BF16" and cols16 == COLS and scale16 is None, (dtype16, cols16, scale16)
+t16 = m.MmapPleTable(shards16, shard_size, COLS * 2, torch.bfloat16, workers=8, chunk=512)
+ids = rng.integers(0, ROWS, size=5000, dtype=np.int64)
+assert np.array_equal(t16.gather(ids), raw16[ids]), "bf16 gather mismatch"
+emb16 = m._MmapNgramEmbedding(ROWS, COLS)
+emb16.table = t16
+ids_f = ids[: ids.size - ids.size % 16]
+out16 = emb16(torch.from_numpy(ids_f.reshape(-1, 16)))
+assert out16.dtype == torch.bfloat16 and out16.shape == (ids_f.size // 16, 16, COLS)
+assert torch.equal(out16.reshape(-1, COLS), table16[ids_f])
+print("bf16 table: OK (gather + placeholder forward, no scale)")
 print("ALL OK")

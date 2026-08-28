@@ -62,6 +62,13 @@ _FP8_DTYPES = {
     "F8_E4M3": torch.float8_e4m3fn,
     "F8_E5M2": torch.float8_e5m2,
 }
+# 16-bit tables need no weight_scale: the stock _dequantize_embeddings is a
+# no-op for non-FP8 rows.
+_TABLE_DTYPES = {
+    **_FP8_DTYPES,
+    "BF16": torch.bfloat16,
+    "F16": torch.float16,
+}
 
 
 def enabled() -> bool:
@@ -121,12 +128,39 @@ class MmapPleTable:
             )
             self.rows_total += rows
         self.pool = ThreadPoolExecutor(max_workers=max(1, int(workers)))
+        self.fast_rows = _env_int("VLLM_PLE_MMAP_FAST_ROWS", 512)
 
     def gather(self, ids: np.ndarray) -> np.ndarray:
         """ids: int64 [N] global row ids -> uint8 [N, row_bytes] (a fresh array)."""
+        import time as _time
+
+        t0 = _time.perf_counter()
+        try:
+            return self._gather(ids)
+        finally:
+            _STATS["gather_ms"] += (_time.perf_counter() - t0) * 1e3
+            _STATS["rows"] += int(np.asarray(ids).size)
+            _STATS["bytes"] += int(np.asarray(ids).size) * self.row_bytes
+
+    def _gather(self, ids: np.ndarray) -> np.ndarray:
         ids = np.ascontiguousarray(ids, dtype=np.int64).reshape(-1)
         if ids.size == 0:
             return np.empty((0, self.row_bytes), dtype=np.uint8)
+        if ids.size <= self.fast_rows:
+            # Decode-sized batches: thread-pool dispatch costs more than the
+            # reads themselves (~50 tasks for ~65 rows). Gather inline instead.
+            if ids.min() < 0 or ids.max() >= self.shard_size * len(self.mm):
+                raise IndexError(
+                    f"PLE row id out of range: [{ids.min()}, {ids.max()}] "
+                    f"for {self.rows_total} rows"
+                )
+            shard = ids // self.shard_size
+            local = ids - shard * self.shard_size
+            out = np.empty((ids.size, self.row_bytes), dtype=np.uint8)
+            for si in np.unique(shard):
+                mask = shard == si
+                out[mask] = self.mm[si][local[mask]]
+            return out
         # Dedupe + sort: repeated n-grams are common, and sorted rows improve
         # locality inside a shard.
         uniq, inverse = np.unique(ids, return_inverse=True)
@@ -199,6 +233,18 @@ class _MmapNgramEmbedding(nn.Module):
         self.table: MmapPleTable | None = None
         self._zeros_dtype = torch.bfloat16
 
+    def _pinned_buf(self, rows: int, row_bytes: int) -> torch.Tensor | None:
+        """Persistent pinned staging buffer for async H2D (grown as needed)."""
+        buf = getattr(self, "_pinned", None)
+        if buf is None or buf.shape[0] < rows or buf.shape[1] != row_bytes:
+            try:
+                cap = max(rows + rows // 2, 4096)
+                buf = torch.empty((cap, row_bytes), dtype=torch.uint8, pin_memory=True)
+            except RuntimeError:  # no CUDA (CPU tests) or pinning unavailable
+                buf = None
+            self._pinned = buf
+        return buf
+
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         table = self.table
         if table is None:
@@ -210,9 +256,19 @@ class _MmapNgramEmbedding(nn.Module):
                 device=ids.device,
             )
         ids_np = ids.detach().to("cpu", non_blocking=False).numpy().reshape(-1)
-        rows = table.gather(ids_np)  # uint8 [N, row_bytes], fresh & writable
-        out = torch.from_numpy(rows).view(table.torch_dtype)
-        out = out.to(ids.device, non_blocking=True)
+        # Dedup on CPU, gather only unique rows, expand on the GPU: fewer disk
+        # reads AND fewer H2D bytes (repeated n-grams are the common case).
+        uniq, inverse = np.unique(ids_np, return_inverse=True)
+        rows = table.gather(uniq)  # uint8 [U, row_bytes], fresh & writable
+        u = rows.shape[0]
+        buf = self._pinned_buf(u, table.row_bytes) if ids.device.type == "cuda" else None
+        if buf is not None:
+            buf[:u].numpy()[:] = rows
+            dev = buf[:u].to(ids.device, non_blocking=True)
+        else:
+            dev = torch.from_numpy(rows).to(ids.device)
+        inv = torch.from_numpy(inverse.reshape(-1)).to(ids.device, non_blocking=True)
+        out = dev.view(table.torch_dtype)[inv]
         return out.reshape(*ids.shape, self.embedding_dim)
 
 
@@ -304,6 +360,33 @@ def _read_scale(entry: tuple) -> torch.Tensor:
 _REGISTRY: dict[str, nn.Module] = {}
 _OP_NAME = "ple_mmap_lookup"
 
+# Aggregate gather-overhead stats, logged every VLLM_PLE_MMAP_STATS_SEC seconds
+# (0 = off). op_ms covers hashing + gather + H2D; gather_ms just the disk reads.
+_STATS = {"calls": 0, "op_ms": 0.0, "gather_ms": 0.0, "rows": 0, "bytes": 0}
+_STATS_LAST = [0.0]
+_STATS_SEC = _env_int("VLLM_PLE_MMAP_STATS_SEC", 30)
+
+
+def _stats_log() -> None:
+    import time as _time
+
+    now = _time.monotonic()
+    if _STATS_SEC <= 0 or now - _STATS_LAST[0] < _STATS_SEC:
+        return
+    elapsed = now - _STATS_LAST[0] if _STATS_LAST[0] else float(_STATS_SEC)
+    _STATS_LAST[0] = now
+    s = _STATS
+    if not s["calls"]:
+        return
+    logger.info(
+        "PLE mmap stats (last %.0fs): %d ops, op %.0f ms total (%.2f ms/op), "
+        "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read",
+        elapsed, s["calls"], s["op_ms"], s["op_ms"] / s["calls"],
+        s["gather_ms"], s["gather_ms"] / s["calls"],
+        s["rows"], s["bytes"] / 2**20,
+    )
+    s.update(calls=0, op_ms=0.0, gather_ms=0.0, rows=0, bytes=0)
+
 
 def _lookup_impl(
     input_ids: torch.Tensor,
@@ -312,11 +395,17 @@ def _lookup_impl(
     output: torch.Tensor,
     layer_name: str,
 ) -> None:
+    import time as _time
+
+    t0 = _time.perf_counter()
     layer = _REGISTRY[layer_name]
     result = layer._ple_mmap_orig_forward_impl(
         None, input_ids, query_start_loc, ngram_context
     )
     output[: result.shape[0]].copy_(result.to(output.dtype))
+    _STATS["calls"] += 1
+    _STATS["op_ms"] += (_time.perf_counter() - t0) * 1e3
+    _stats_log()
 
 
 def _lookup_fake(
@@ -404,11 +493,13 @@ def apply(cls: type) -> None:
     def _setup_table(self) -> None:
         if self.ngram_embedding.table is not None:
             return
-        model_path = self._ple_mmap_model_path
+        # VLLM_PLE_MMAP_DIR: serve the table from a different directory than the
+        # checkpoint (e.g. an FP8 copy of the table on local NVMe).
+        model_path = os.environ.get("VLLM_PLE_MMAP_DIR") or self._ple_mmap_model_path
         if not model_path or not os.path.isdir(model_path):
             raise RuntimeError(
-                f"PLE mmap: model path {model_path!r} is not a local directory; "
-                "point --model at the downloaded snapshot"
+                f"PLE mmap: table path {model_path!r} is not a local directory; "
+                "point --model at the downloaded snapshot or set VLLM_PLE_MMAP_DIR"
             )
         m = re.search(r"layers\.(\d+)\.", self._ple_mmap_prefix)
         if not m:
@@ -420,9 +511,9 @@ def apply(cls: type) -> None:
         cols = shards.pop("__cols__")  # type: ignore[arg-type]
         if cols != self.head_dim:
             raise RuntimeError(f"PLE mmap: shard width {cols} != head_dim {self.head_dim}")
-        if dtype_str not in _FP8_DTYPES:
-            raise RuntimeError(f"PLE mmap: only FP8 shards are supported, got {dtype_str}")
-        if not hasattr(self, "_offload_weight_scale"):
+        if dtype_str not in _TABLE_DTYPES:
+            raise RuntimeError(f"PLE mmap: unsupported shard dtype {dtype_str}")
+        if dtype_str in _FP8_DTYPES and not hasattr(self, "_offload_weight_scale"):
             if scale_entry is None:
                 raise RuntimeError("PLE mmap: FP8 shards without ngram_embedding.weight_scale")
             self.register_buffer(
@@ -440,18 +531,18 @@ def apply(cls: type) -> None:
                     f"PLE mmap: shard {idx} has {rows} rows, expected {expected}"
                 )
         table = MmapPleTable(
-            shards, shard_size, cols, _FP8_DTYPES[dtype_str],
+            shards, shard_size, cols * _itemsize(dtype_str), _TABLE_DTYPES[dtype_str],
             workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
             chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
         )
         if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
-            logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * cols / 2**30)
+            logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
             table.prewarm()
         self.ngram_embedding.table = table
         logger.info(
             "PLE mmap: layer %d, %d shards, %d rows x %d B (%.1f GiB on disk), dtype %s, %d workers",
-            layer_idx, len(shards), table.rows_total, cols,
-            table.rows_total * cols / 2**30, dtype_str, table.pool._max_workers,
+            layer_idx, len(shards), table.rows_total, table.row_bytes,
+            table.rows_total * table.row_bytes / 2**30, dtype_str, table.pool._max_workers,
         )
 
     def forward_impl(self, hidden_states, input_ids, query_start_loc, ngram_context,
