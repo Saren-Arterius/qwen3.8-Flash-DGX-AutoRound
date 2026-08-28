@@ -31,3 +31,10 @@ ARG FLA_UTILS=${SP}/vllm/third_party/flash_linear_attention/ops/utils.py
 RUN sed -i 's|DEFAULT = 102400|DEFAULT = 101376  # spark-fla-shmem: GB10 99KiB = ADA, big GDN tiles fit|' ${FLA_UTILS} \
  && grep -q "spark-fla-shmem" ${FLA_UTILS} && echo "fla shmem gate patched"
 
+# int4+fp8 hybrid: dispatch blockwise-fp8 side layers from AutoGPTQConfig
+# (no-op unless VLLM_FP8_HYBRID=1 at runtime).
+ARG GPTQ_PY=${SP}/vllm/model_executor/layers/quantization/auto_gptq.py
+COPY src/vllm_fp8_hybrid.py ${SP}/vllm_fp8_hybrid.py
+RUN printf '\n\n# --- qwen38-flash-dgx: int4+fp8 hybrid dispatch (VLLM_FP8_HYBRID=1) ---\nfrom vllm_fp8_hybrid import apply as _fp8_hybrid_apply\n_fp8_hybrid_apply()\n' >> ${GPTQ_PY} \
+ && python3 -c "import ast; ast.parse(open('${GPTQ_PY}').read()); print('auto_gptq.py patched OK')"
+
