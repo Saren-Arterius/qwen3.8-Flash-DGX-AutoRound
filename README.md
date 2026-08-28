@@ -1,3 +1,6 @@
+# AI Slop Warning
+Although the working vLLM is in my GB10, this repo is prepared by Mr. Claude so it's very likely something will break or cannot reproduce.
+
 # Qwen3.8-Flash-Next on a single DGX Spark (GB10)
 
 Run **Qwen3.8-Flash-Next** — a ~176B-parameter model (125B main + 51B n-gram, 6B
@@ -19,6 +22,21 @@ rest of the pool goes to KV, and everything runs on stock GB10 kernels.
 
 The result, versus the llama.cpp GGUF that was the only working option on a Spark
 before: **~4–5× faster prefill, MTP (which the GGUF cannot do), and 2× the context.**
+
+> ## This fork: int4 + int8 + fp8 hybrid, ~49 tok/s
+>
+> This fork replaces the NVFP4 checkpoint with
+> [Intel's W4A16 AutoRound int4](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)
+> plus an int8 GPTQ lm_head and blockwise-fp8 side layers (all prepared by the
+> CPU-only tools in `tools/`), an **fp8** PLE table, a GB10 Triton-tile fix for
+> the 36 GDN layers, a much faster PLE gather hot path, working **prefix
+> caching**, and an optional **never-evict pin** that keeps your system
+> prompt's KV resident. Measured on a DGX Spark: **~49 tok/s single-stream
+> decode with MTP=2** (~2,000 tok/s prefill) — vs 25–28 tok/s for the NVFP4
+> recipe below. The full recipe, per-patch docs, and checkpoint preparation:
+> **[docs/OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md)**; serve it with
+> `scripts/serve-intel-ar.sh`. Upstream's NVFP4 path (`scripts/serve.sh`)
+> still works unchanged.
 
 | | llama.cpp IQ4_XS | **this repo (vLLM NVFP4)** |
 |---|---|---|
@@ -150,13 +168,19 @@ Details: [results-radixark-vllm.md](https://github.com/jschmied/qwen38-flash-nex
 ## What's in here
 
 ```
-Dockerfile                 official vLLM Flash-Next image + the patch
-src/vllm_ple_mmap.py       the patch (mmap PLE table; opaque splitting op)
+Dockerfile                 official vLLM Flash-Next image + the patches below
+src/vllm_ple_mmap.py       mmap PLE table (any dtype, relocatable dir, fast gather)
+src/vllm_fp8_hybrid.py     int4+fp8 hybrid dispatch on the GPTQ config (this fork)
+src/patch_never_evict.py   never-evict system-prompt KV pinning (this fork)
 src/test_ple_mmap_cpu.py   CPU unit test for the gather (no GPU needed)
+src/test_never_evict_pin.py  CPU unit test for the pin (no GPU needed)
 scripts/download-weights.sh
-scripts/serve.sh
+scripts/serve.sh           upstream NVFP4 serving
+scripts/serve-intel-ar.sh  int4/int8/fp8 hybrid serving (this fork)
 scripts/smoke-test.sh
-docs/HOW-IT-WORKS.md
+tools/                     CPU-only checkpoint preparation (this fork)
+docs/HOW-IT-WORKS.md       the original mmap-PLE story
+docs/OPTIMIZATIONS.md      this fork's recipe, patch by patch
 ```
 
 Run the unit test (no GPU):
@@ -171,9 +195,11 @@ docker run --rm -v "$PWD/src:/t" -w /t --entrypoint python3 \
 - **One big model at a time.** At `GPU_MEM=0.85` this uses most of the 128 GB pool;
   don't co-locate another large model (an 8B embedding model next to it already
   starves the KV cache — we moved ours to another machine).
-- **`--no-enable-prefix-caching` is required** (a GB10 GDN kernel bug corrupts on the
-  cached-block path) and **full `torch.compile` is off** (an Inductor int64-indexing
-  assert on sm_121); the serve script sets both.
+- **`--no-enable-prefix-caching` is required on the NVFP4 path** (a GB10 GDN kernel
+  bug corrupts on the cached-block path) and **full `torch.compile` is off** (an
+  Inductor int64-indexing assert on sm_121); the serve script sets both. On this
+  fork's fp8-hybrid path the affected GEMM runs a different kernel and prefix
+  caching works — `PREFIX_CACHE=1` in `scripts/serve-intel-ar.sh`.
 - **1M context is out of reach on one box**: the QSA layers refuse an fp8 KV cache, and
   in bf16 a single 1M request needs ~30 GiB of KV. 500k with YaRN is the validated
   ceiling; 800k booted but got OOM-killed on a long prefill.
@@ -187,6 +213,16 @@ docker run --rm -v "$PWD/src:/t" -w /t --entrypoint python3 \
 
 - Model: **Qwen team, Alibaba** — Qwen3.8-Flash-Next.
 - NVFP4 checkpoint: **[RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4)**.
+- int4 checkpoint this fork builds on: **[Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)**
+  (AutoRound); fp8 PLE table from **[Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8)**.
+- Several pieces originate in the Qwen3.5-122B-A10B Spark recipes:
+  the int4 AutoRound + int8 lm_head serving approach from
+  **[albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4)**;
+  the FLA shared-memory gate fix and the int4+fp8 hybrid idea from
+  **[Entrpi/qwen3.5-122B-A10B-on-spark](https://github.com/Entrpi/qwen3.5-122B-A10B-on-spark)**.
+  The never-evict pin was built for that 122B stack on top of the ARC
+  GPU-eviction work in [vllm#40270](https://github.com/vllm-project/vllm/pull/40270)
+  and re-ported here.
 - Serving engine and base image: **vLLM** (`vllm/vllm-openai:qwen38-flash-next`,
   the `release/qwen38next` recipe / PR #53896).
 - Independent reproduction on a DGX Spark, the native-offload fixes and the

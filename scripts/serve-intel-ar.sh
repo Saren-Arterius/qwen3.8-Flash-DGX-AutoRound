@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Serve the int4+int8+fp8 hybrid build of Qwen3.8-Flash-Next on a DGX Spark:
+# Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound experts via GPTQ-Marlin int4,
+# int8 GPTQ lm_head, blockwise-fp8 side layers, PLE n-gram table mmapped from
+# a separate directory (fp8 table recommended — see tools/fetch-ple-table-fp8.sh).
+#
+# The checkpoint must be prepared first: see docs/OPTIMIZATIONS.md ("Checkpoint
+# preparation") — tools/quantize_lm_head_int8.py, tools/fp8_convert.py,
+# tools/strip_ngram_index.py, plus the quantization_config for config.json.
+#
+#   MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound \
+#   TABLE_DIR=/models/ple-table-fp8 scripts/serve-intel-ar.sh
+#
+#   MTP=0 ... scripts/serve-intel-ar.sh     # no speculation (first-boot sanity)
+set -euo pipefail
+
+NAME="${NAME:-qwen38-flash}"
+IMAGE="${IMAGE:-qwen38-flash-dgx}"
+MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound}"
+TABLE_DIR="${TABLE_DIR:-/models/ple-table-fp8}"
+PORT="${PORT:-18300}"
+CTX="${CTX:-262144}"
+SEQS="${SEQS:-8}"
+GPU_MEM="${GPU_MEM:-0.85}"
+MTP="${MTP:-2}"
+PREWARM="${PREWARM:-1}"
+EXTRA="${EXTRA:-}"
+
+# PLE gather = CPU op + H2D copy: must run OUTSIDE CUDA graphs.
+SPLIT='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
+CC="${CC:--cc.cudagraph_mode=PIECEWISE -cc.splitting_ops=$SPLIT}"
+
+SPEC=()
+if [ "$MTP" != 0 ]; then
+  SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
+fi
+
+# PREFIX_CACHE=1: upstream disabled prefix caching over a CUBLAS error in the
+# GDN in_proj GEMM on the cached-block path; the fp8-hybrid in_proj bypasses
+# that kernel, and with FP8_HYBRID=1 prefix caching has been stable here.
+PC_ARG=--no-enable-prefix-caching
+[ "${PREFIX_CACHE:-0}" = 1 ] && PC_ARG=--enable-prefix-caching
+
+# Never-evict pin: PIN_PROMPT="some exact substring of your system prompt"
+# keeps that prompt's KV blocks resident across other traffic (needs
+# PREFIX_CACHE=1). See docs/OPTIMIZATIONS.md.
+PIN_PROMPT="${PIN_PROMPT:-}"
+PIN_ARG=()
+if [ -n "$PIN_PROMPT" ] && [ "${PREFIX_CACHE:-0}" = 1 ]; then
+  PIN_ARG=(--never-evict-kv-cache-prompt-includes "$PIN_PROMPT"
+           --never-evict-kv-cache-max-fraction "${PIN_MAX_FRACTION:-0.25}")
+fi
+
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+# shellcheck disable=SC2086
+docker run -d --name "$NAME" --restart unless-stopped \
+  --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
+  -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
+  -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
+  -e VLLM_PLE_MMAP_DIR=/ple-table \
+  -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
+  -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
+  -e VLLM_USE_DEEP_GEMM=0 \
+  -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+  "$IMAGE" \
+  /model --served-model-name "${SERVED_NAME:-qwen3.8-flash-next}" \
+    --host 0.0.0.0 --port 8000 --load-format "${LOAD_FORMAT:-fastsafetensors}" \
+    --max-model-len "$CTX" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GPU_MEM" \
+    $PC_ARG --enable-chunked-prefill --max-num-batched-tokens 8192 \
+    $CC \
+    --no-enable-flashinfer-autotune \
+    --kv-cache-dtype auto \
+    $EXTRA \
+    --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 \
+    "${PIN_ARG[@]}" "${SPEC[@]}"
+
+echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM)"
+echo ">> follow with: docker logs -f $NAME"
