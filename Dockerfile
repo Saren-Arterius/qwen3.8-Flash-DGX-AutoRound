@@ -38,3 +38,9 @@ COPY src/vllm_fp8_hybrid.py ${SP}/vllm_fp8_hybrid.py
 RUN printf '\n\n# --- qwen38-flash-dgx: int4+fp8 hybrid dispatch (VLLM_FP8_HYBRID=1) ---\nfrom vllm_fp8_hybrid import apply as _fp8_hybrid_apply\n_fp8_hybrid_apply()\n' >> ${GPTQ_PY} \
  && python3 -c "import ast; ast.parse(open('${GPTQ_PY}').read()); print('auto_gptq.py patched OK')"
 
+# never-evict prompt pinning (pin-only port of the 122B recipe's arc_pin2):
+# --never-evict-kv-cache-prompt-includes pins the HA system prompt's KV blocks
+# against eviction. No-op unless the flag is passed at runtime.
+COPY src/patch_never_evict.py /tmp/patch_never_evict.py
+RUN python3 /tmp/patch_never_evict.py && rm /tmp/patch_never_evict.py
+
