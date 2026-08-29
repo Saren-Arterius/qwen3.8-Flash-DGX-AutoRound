@@ -36,6 +36,10 @@ export WORKERS=64
 # export HIT_DEBUG=1
 # perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
 export STEP_PROFILE=1
+# PLE table over RDMA from the wtako daemon (Phase-2 soak: VERIFY cross-checks
+# every RDMA row against the mmap table; drop VERIFY + the mmap dir at cutover)
+export PLE_RDMA=192.168.0.1:18515
+export PLE_RDMA_VERIFY=1
 # fp8 kernel experiment E2: FP8 Marlin (small-M specialist, handles block
 # scales). E1 DeepGEMM rejected: SM120 kernels CUDA_ERROR_LAUNCH_FAILED on
 # GB10/sm121 (likely sm_120a-locked cubins). Marlin sits below cutlass, so

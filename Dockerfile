@@ -97,3 +97,13 @@ RUN python3 /tmp/patch_mamba_align_split.py && rm /tmp/patch_mamba_align_split.p
 # touch /tmp/profile_trigger). This vLLM predates VLLM_TORCH_PROFILER_DIR.
 COPY src/patch_step_profile.py /tmp/patch_step_profile.py
 RUN python3 /tmp/patch_step_profile.py && rm /tmp/patch_step_profile.py
+
+# PLE table over RDMA (VLLM_PLE_RDMA=<host:port>): one-sided READs against
+# the wtako table daemon; ~20us per decode gather vs ~3ms mmap page faults.
+# Container must run with --device /dev/infiniband --ulimit memlock=-1:-1.
+RUN apt-get update && apt-get install -y --no-install-recommends libibverbs-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+COPY src/ple_rdma/ple_rdma.c /tmp/ple_rdma.c
+RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs \
+      -o /usr/local/lib/python3.12/dist-packages/libple_rdma.so && rm /tmp/ple_rdma.c
+COPY src/ple_rdma/ple_rdma.py /usr/local/lib/python3.12/dist-packages/ple_rdma.py

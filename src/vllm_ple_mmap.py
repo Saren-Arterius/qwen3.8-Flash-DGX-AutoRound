@@ -230,6 +230,95 @@ class MmapPleTable:
 # --------------------------------------------------------------------------- #
 # Placeholder that stands in for VocabParallelEmbedding
 # --------------------------------------------------------------------------- #
+class RdmaPleTable:
+    """Row gather via one-sided RDMA READs against the wtako table daemon.
+
+    Same duck-type as MmapPleTable (gather/row_bytes/torch_dtype/rows_total).
+    VLLM_PLE_RDMA=<host:port> selects it; VLLM_PLE_RDMA_VERIFY=1 cross-checks
+    every RDMA row against the mmap table (requires the mmap dir; temporary,
+    Phase-2 soak only). If the server holds a shard subset, missing rows fall
+    back to the mmap table.
+    """
+
+    def __init__(self, endpoint: str, shard_size: int, row_bytes: int,
+                 torch_dtype: torch.dtype, rows_total: int,
+                 mmap_table: "MmapPleTable | None") -> None:
+        import ple_rdma
+
+        host, port = endpoint.rsplit(":", 1)
+        dev = os.environ.get("VLLM_PLE_RDMA_DEV", "roceP2p1s0f0")
+        gid = _env_int("VLLM_PLE_RDMA_GID", 5)
+        self.client = ple_rdma.Client(host, int(port), dev, gid)
+        if self.client.remote["row_bytes"] != row_bytes:
+            raise RuntimeError("PLE rdma: row_bytes mismatch with server")
+        self.shard_size = int(shard_size)
+        self.row_bytes = int(row_bytes)
+        self.torch_dtype = torch_dtype
+        self.rows_total = int(rows_total)
+        self.mmap_table = mmap_table
+        self.verify = _env_int("VLLM_PLE_RDMA_VERIFY", 0) and mmap_table is not None
+        self.loaded = np.asarray(sorted(self.client.remote["loaded_shards"]))
+        self.full = self.loaded.size * self.shard_size >= self.rows_total
+        if not self.full and mmap_table is None:
+            raise RuntimeError("PLE rdma: server holds a subset and no mmap fallback")
+        logger.info(
+            "PLE rdma: %s dev=%s gid=%d, %d/%d shards served%s",
+            endpoint, dev, gid, self.loaded.size,
+            -(-self.rows_total // self.shard_size),
+            ", VERIFY mode" if self.verify else "",
+        )
+
+    def gather(self, ids: np.ndarray) -> np.ndarray:
+        import time as _time
+
+        t0 = _time.perf_counter()
+        try:
+            return self._gather(ids)
+        finally:
+            _STATS["gather_ms"] += (_time.perf_counter() - t0) * 1e3
+            _STATS["rows"] += int(np.asarray(ids).size)
+            _STATS["bytes"] += int(np.asarray(ids).size) * self.row_bytes
+
+    def _gather(self, ids: np.ndarray) -> np.ndarray:
+        ids = np.ascontiguousarray(ids, dtype=np.int64).reshape(-1)
+        if ids.size == 0:
+            return np.empty((0, self.row_bytes), dtype=np.uint8)
+        if ids.min() < 0 or ids.max() >= self.rows_total:
+            raise IndexError(
+                f"PLE rdma: row id out of range [{ids.min()}, {ids.max()}]"
+            )
+        served = self.full
+        if not served:
+            mask = np.isin(ids // self.shard_size, self.loaded)
+            served = bool(mask.all())
+        if not served:
+            out = self.mmap_table._gather(ids)
+            if mask.any():
+                rdma_rows = self._read(ids[mask])
+                if self.verify and not np.array_equal(rdma_rows, out[mask]):
+                    logger.error("PLE rdma VERIFY MISMATCH (mixed batch)")
+                    _STATS["rdma_mismatch"] = _STATS.get("rdma_mismatch", 0) + 1
+            return out
+        out = self._read(ids)
+        if self.verify:
+            ref = self.mmap_table._gather(ids)
+            if not np.array_equal(out, ref):
+                bad = int((out != ref).any(axis=1).sum())
+                logger.error("PLE rdma VERIFY MISMATCH: %d/%d rows", bad, ids.size)
+                _STATS["rdma_mismatch"] = _STATS.get("rdma_mismatch", 0) + bad
+                return ref
+        return out
+
+    def _read(self, ids: np.ndarray) -> np.ndarray:
+        cap = self.client.max_rows
+        if ids.size <= cap:
+            return self.client.read_rows(ids).copy()
+        out = np.empty((ids.size, self.row_bytes), dtype=np.uint8)
+        for a in range(0, ids.size, cap):
+            out[a:a + cap] = self.client.read_rows(ids[a:a + cap])
+        return out
+
+
 class _MmapNgramEmbedding(nn.Module):
     """Duck-types the bits of VocabParallelEmbedding the PLE code reads.
 
@@ -505,10 +594,12 @@ def apply(cls: type) -> None:
     def _setup_table(self) -> None:
         if self.ngram_embedding.table is not None:
             return
+        rdma_ep = os.environ.get("VLLM_PLE_RDMA")
         # VLLM_PLE_MMAP_DIR: serve the table from a different directory than the
         # checkpoint (e.g. an FP8 copy of the table on local NVMe).
         model_path = os.environ.get("VLLM_PLE_MMAP_DIR") or self._ple_mmap_model_path
-        if not model_path or not os.path.isdir(model_path):
+        have_dir = bool(model_path) and os.path.isdir(model_path)
+        if not have_dir and not rdma_ep:
             raise RuntimeError(
                 f"PLE mmap: table path {model_path!r} is not a local directory; "
                 "point --model at the downloaded snapshot or set VLLM_PLE_MMAP_DIR"
@@ -517,44 +608,64 @@ def apply(cls: type) -> None:
         if not m:
             raise RuntimeError(f"PLE mmap: cannot find layer index in {self._ple_mmap_prefix!r}")
         layer_idx = int(m.group(1))
-        shards, dtype_str, scale_entry = _find_shards(model_path, layer_idx)
-        if not shards:
-            raise RuntimeError(f"PLE mmap: no shard tensors for layer {layer_idx} under {model_path}")
-        cols = shards.pop("__cols__")  # type: ignore[arg-type]
-        if cols != self.head_dim:
-            raise RuntimeError(f"PLE mmap: shard width {cols} != head_dim {self.head_dim}")
-        if dtype_str not in _TABLE_DTYPES:
-            raise RuntimeError(f"PLE mmap: unsupported shard dtype {dtype_str}")
-        if dtype_str in _FP8_DTYPES and not hasattr(self, "_offload_weight_scale"):
-            if scale_entry is None:
-                raise RuntimeError("PLE mmap: FP8 shards without ngram_embedding.weight_scale")
-            self.register_buffer(
-                "_offload_weight_scale",
-                _read_scale(scale_entry).to(torch.accelerator.current_accelerator()),
-                persistent=False,
-            )
         parts = int(self.split_ngram_parts)
         vocab = int(self.ngram_embedding.org_vocab_size)
         shard_size = math.ceil(vocab / parts)
-        for idx, (_p, _o, rows) in shards.items():
-            expected = max(0, min(shard_size, vocab - idx * shard_size))
-            if rows != expected:
-                raise RuntimeError(
-                    f"PLE mmap: shard {idx} has {rows} rows, expected {expected}"
+        mmap_table = None
+        if have_dir:
+            shards, dtype_str, scale_entry = _find_shards(model_path, layer_idx)
+            if not shards:
+                raise RuntimeError(f"PLE mmap: no shard tensors for layer {layer_idx} under {model_path}")
+            cols = shards.pop("__cols__")  # type: ignore[arg-type]
+            if cols != self.head_dim:
+                raise RuntimeError(f"PLE mmap: shard width {cols} != head_dim {self.head_dim}")
+            if dtype_str not in _TABLE_DTYPES:
+                raise RuntimeError(f"PLE mmap: unsupported shard dtype {dtype_str}")
+            if dtype_str in _FP8_DTYPES and not hasattr(self, "_offload_weight_scale"):
+                if scale_entry is None:
+                    raise RuntimeError("PLE mmap: FP8 shards without ngram_embedding.weight_scale")
+                self.register_buffer(
+                    "_offload_weight_scale",
+                    _read_scale(scale_entry).to(torch.accelerator.current_accelerator()),
+                    persistent=False,
                 )
-        table = MmapPleTable(
-            shards, shard_size, cols * _itemsize(dtype_str), _TABLE_DTYPES[dtype_str],
-            workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
-            chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
-        )
-        if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
-            logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
-            table.prewarm()
+            for idx, (_p, _o, rows) in shards.items():
+                expected = max(0, min(shard_size, vocab - idx * shard_size))
+                if rows != expected:
+                    raise RuntimeError(
+                        f"PLE mmap: shard {idx} has {rows} rows, expected {expected}"
+                    )
+            mmap_table = MmapPleTable(
+                shards, shard_size, cols * _itemsize(dtype_str), _TABLE_DTYPES[dtype_str],
+                workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
+                chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
+            )
+        if rdma_ep:
+            # RDMA-only mode (no local table dir): geometry is fixed fp8 rows
+            # of head_dim bytes; the global scale comes from the server hello.
+            row_bytes = mmap_table.row_bytes if mmap_table else int(self.head_dim)
+            torch_dtype = mmap_table.torch_dtype if mmap_table else torch.float8_e4m3fn
+            table = RdmaPleTable(rdma_ep, shard_size, row_bytes, torch_dtype,
+                                 vocab, mmap_table)
+            if not hasattr(self, "_offload_weight_scale"):
+                scale = table.client.remote.get("weight_scale")
+                if scale is None:
+                    raise RuntimeError("PLE rdma: no weight_scale from server or checkpoint")
+                self.register_buffer(
+                    "_offload_weight_scale",
+                    torch.tensor(scale, dtype=torch.bfloat16).to(
+                        torch.accelerator.current_accelerator()),
+                    persistent=False,
+                )
+        else:
+            table = mmap_table
+            if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
+                logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
+                table.prewarm()
         self.ngram_embedding.table = table
         logger.info(
-            "PLE mmap: layer %d, %d shards, %d rows x %d B (%.1f GiB on disk), dtype %s, %d workers",
-            layer_idx, len(shards), table.rows_total, table.row_bytes,
-            table.rows_total * table.row_bytes / 2**30, dtype_str, table.pool._max_workers,
+            "PLE table ready: layer %d, %d rows x %d B, backend %s",
+            layer_idx, table.rows_total, table.row_bytes, type(table).__name__,
         )
 
     def forward_impl(self, hidden_states, input_ids, query_start_loc, ngram_context,
