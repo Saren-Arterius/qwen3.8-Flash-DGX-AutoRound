@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fix: _mamba_block_aligned_split aligns prefill chunks to the wrong size.
+"""Fix: two sites treat EngineCore's rewritten block_size as the mamba size.
 
 The scheduler's ``cache_config.block_size`` is rewritten by EngineCore to the
 *minimum* block size across KV cache groups (the fine/draft granularity — 8 on
@@ -27,6 +27,10 @@ import ast
 import sys
 
 SCHED = "/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py"
+MHYB = (
+    "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/"
+    "model_states/mamba_hybrid.py"
+)
 
 
 def edit(path: str, old: str, new: str) -> None:
@@ -54,5 +58,27 @@ edit(
 """,
 )
 
+# Second half of the same bug, diagnosed upstream (blazux/qwen3.8-Flash-DGX
+# issue #2, fix 8347e7c): the worker's align-mode state-slot seed divides by
+# cache_config.block_size too, so a prefix hit at e.g. 6400 tokens seeds
+# column 799 instead of 3 -> reads past the block-table row -> garbage/null
+# block id -> the state restore is skipped (see mamba_utils_guarded.py) and
+# the request runs on a zero/stale mamba state: greedy outputs change on
+# cache hits.
+edit(
+    MHYB,
+    """                (new_req_data.num_computed_tokens - 1) // self.cache_config.block_size
+""",
+    """                (new_req_data.num_computed_tokens - 1)
+                # block_size is the MIN across KV groups; the state slot is
+                # per MAMBA block (blazux/qwen3.8-Flash-DGX#2, 8347e7c).
+                // (
+                    self.cache_config.mamba_block_size
+                    or self.cache_config.block_size
+                )
+""",
+)
+
 ast.parse(open(SCHED).read())
+ast.parse(open(MHYB).read())
 print("patch_mamba_align_split.py applied OK", file=sys.stderr)

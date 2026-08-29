@@ -1165,9 +1165,14 @@ class MambaSpecDecodeGPUContext:
         if self.guard_step % 512 == 0:
             hits = int(self.guard_hits_cpu[0])
             if hits > self.guard_reported:
-                logger.warning(
+                # Root cause of these was fixed (mamba block-size seed,
+                # blazux/qwen3.8-Flash-DGX#2 / 8347e7c): the guard is now a
+                # tripwire, any hit indicates a NEW bug worth reporting.
+                logger.error(
                     "mamba state-copy guard: %d out-of-range block id(s) "
-                    "skipped (would have been an illegal memory access)",
+                    "skipped (would have been an illegal memory access). "
+                    "Expected 0 since the mamba block-size seed fix - "
+                    "this indicates a new bug, please report it.",
                     hits,
                 )
                 self.guard_reported = hits

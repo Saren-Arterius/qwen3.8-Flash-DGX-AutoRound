@@ -269,6 +269,17 @@ Long prompts effectively never hit. The patch makes the split use
 `cache_config.mamba_block_size` (1600). Verified: an 8k-token repeat goes
 10.1 s → **0.90 s on the 2nd request**.
 
+The same rewritten `block_size` also poisoned the **worker** side: the
+align-mode state-slot seed (`mamba_hybrid.py`) divided by it too, so a prefix
+hit at 6400 tokens seeded state column 799 instead of 3, read past the
+block-table row and restored a wrong (often all-zero / stale) mamba state —
+greedy outputs visibly changed on cache hits. Root-caused upstream by
+[blazux](https://github.com/blazux/qwen3.8-Flash-DGX/issues/2#issuecomment-546252046)
+(his fix: `8347e7c`); the same one-line seed fix is folded into this patch.
+Verified: cold-vs-hit first-token logprobs now agree within the stack's
+normal run-to-run jitter (Marlin atomic-add nondeterminism), where before the
+fix greedy outputs diverged within the first few tokens.
+
 Notes: the prefix-cache granularity is large (1600 tokens; shorter prefixes
 get no reuse), and a repeat hit tops out at `round_down(P,1600) − 1600` — MTP
 (eagle-style) always recomputes the last matched block.
@@ -310,6 +321,11 @@ access / Xid 31 under load" crash class (also
 state-copy race) and bounds-checks every block id against its state pool
 before dereferencing — an out-of-range id skips the copy and bumps a counter
 (logged as `mamba state-copy guard`) instead of taking down the CUDA context.
+
+With the block-size seed fix (patch 5) the out-of-range ids the guard was
+absorbing are gone at the root: the counter is expected to stay at **0**, and
+a nonzero count is logged as an *error* — it now indicates a new bug worth
+reporting, not a known quirk.
 
 ### 8. Prefix-cache tracing (`src/patch_hit_debug.py`, `HIT_DEBUG=1`)
 
