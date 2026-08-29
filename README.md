@@ -16,7 +16,7 @@ table is a pure lookup that a token only touches 16 rows of, so it is served
 (full story: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)). Upstream serves the
 official **NVFP4** checkpoint at 25–28 tok/s; for that path and its tuning
 guide, use upstream. This fork replaces the checkpoint with
-**[Intel's W4A16 AutoRound int4](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)**
+**[Intel's W4A16 AutoRound int4](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound)**
 plus an int8 GPTQ lm_head and blockwise-fp8 side layers (all prepared by
 CPU-only tools in `tools/`), an **fp8** PLE table, and a set of GB10/vLLM
 patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same box.
@@ -95,7 +95,7 @@ cd qwen3.8-Flash-DGX-AutoRound
 docker build -t qwen38-flash-dgx .   # official image + this fork's patches
 
 # The prepared checkpoint + PLE table (one-time, ~122 GiB):
-hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound
+hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid
 hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 --local-dir /models/ple-table-fp8
 # (or build them yourself from Intel's release: ./prepare.sh — see below)
 
@@ -123,11 +123,11 @@ edited copy or a local-only commit on top.
 The quickstart's two `hf download` repos are the finished artifacts — hashes
 verified against the local originals. If you'd rather build (or audit) them
 yourself from
-[Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound),
+[Intel/Qwen3.8-Flash-Next-W4A16-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound),
 one script runs the whole pipeline (CPU-only — a NAS box is fine):
 
 ```bash
-./prepare.sh /models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound /models/ple-table-fp8
+./prepare.sh /models/Qwen3.8-Flash-Next-W4A16-AutoRound /models/ple-table-fp8
 ```
 
 Each step is explained in `prepare.sh`'s header comments: int8 lm_head repack,
@@ -142,7 +142,7 @@ AutoRound config is kept as `config.json.autoround`.
 
 ```bash
 docker build -t qwen38-flash-dgx .
-MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound \
+MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-AutoRound \
 TABLE_DIR=/models/ple-table-fp8 \
 PREFIX_CACHE=1 PIN_PROMPT="You are HomeBot, the household assistant." \
 scripts/serve-intel-ar.sh
@@ -373,7 +373,7 @@ docs/HOW-IT-WORKS.md          upstream's mmap-PLE story
 - **This is a fork of [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)** —
   the original mmap-PLE idea, the GB10 serving recipe, the NVFP4 path, and
   docs/HOW-IT-WORKS.md are theirs.
-- int4 checkpoint this fork builds on: **[Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)**
+- int4 checkpoint this fork builds on: **[Intel/Qwen3.8-Flash-Next-W4A16-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-AutoRound)**
   (AutoRound); fp8 PLE table from **[Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8)**.
 - Several pieces originate in the Qwen3.5-122B-A10B Spark recipes:
   the int4 AutoRound + int8 lm_head serving approach from
