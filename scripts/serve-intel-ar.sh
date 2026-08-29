@@ -17,7 +17,9 @@ set -euo pipefail
 NAME="${NAME:-qwen38-flash}"
 IMAGE="${IMAGE:-qwen38-flash-dgx}"
 MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound}"
-TABLE_DIR="${TABLE_DIR:-/models/ple-table-fp8}"
+# NOTE "-" not ":-": TABLE_DIR="" is meaningful (no local table; PLE rows
+# come via VLLM_PLE_RDMA instead), only an UNSET var gets the default.
+TABLE_DIR="${TABLE_DIR-/models/ple-table-fp8}"
 PORT="${PORT:-18300}"
 CTX="${CTX:-262144}"
 SEQS="${SEQS:-8}"
@@ -39,6 +41,11 @@ CC="${CC:--cc.cudagraph_mode=PIECEWISE -cc.splitting_ops=$SPLIT}"
 # possibly faster kernels; default off as inherited from the NVFP4 recipe).
 AT_ARG=--no-enable-flashinfer-autotune
 [ "${FLASHINFER_AUTOTUNE:-0}" = 1 ] && AT_ARG=
+
+# TABLE_DIR="": no local table mount — PLE rows come from the RDMA daemon
+# (VLLM_PLE_RDMA) instead of a mmapped directory.
+TABLE_ARGS=()
+[ -n "${TABLE_DIR:-}" ] && TABLE_ARGS=(-v "$TABLE_DIR:/ple-table:ro" -e VLLM_PLE_MMAP_DIR=/ple-table)
 
 SPEC=()
 if [ "$MTP" != 0 ]; then
@@ -66,7 +73,7 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --restart unless-stopped \
   --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
   --device /dev/infiniband --ulimit memlock=-1:-1 \
-  -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
+  -v "$MODEL_DIR:/model:ro" "${TABLE_ARGS[@]}" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
   -e VLLM_PLE_MMAP_FAST_ROWS="${PLE_FAST_ROWS:-512}" -e VLLM_PLE_MMAP_CHUNK="${PLE_CHUNK:-2048}" \
@@ -76,7 +83,6 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_PLE_RDMA_DEV="${PLE_RDMA_DEV:-roceP2p1s0f0}" \
   -e VLLM_PLE_RDMA_GID="${PLE_RDMA_GID:-5}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
-  -e VLLM_PLE_MMAP_DIR=/ple-table \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
   -e VLLM_USE_DEEP_GEMM="${USE_DEEP_GEMM:-0}" \

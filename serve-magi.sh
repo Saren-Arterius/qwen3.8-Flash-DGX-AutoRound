@@ -5,7 +5,9 @@
 cd "$(dirname "$0")"
 
 export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound"
-export TABLE_DIR=/mnt/ple-ram
+# no local table since the 2026-08-30 RDMA cutover: /mnt/ple-ram is swap-only,
+# rows come from wtako's ple-rdma-server (PLE_RDMA below)
+export TABLE_DIR=
 # seq=8 + prefix cache + stock FLA gate: A/B for the 2026-08-28 CUDA
 # illegal-access crashes (both on prefix-cache resume steps). If stable, the
 # lowered FLA shmem gate (big GDN tiles at 99KiB) was the culprit.
@@ -36,10 +38,10 @@ export WORKERS=64
 # export HIT_DEBUG=1
 # perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
 export STEP_PROFILE=1
-# PLE table over RDMA from the wtako daemon (Phase-2 soak: VERIFY cross-checks
-# every RDMA row against the mmap table; drop VERIFY + the mmap dir at cutover)
+# PLE table over RDMA from the wtako daemon (phase-2 VERIFY soak passed with
+# zero mismatches; mmap dir dropped at the phase-3 cutover)
 export PLE_RDMA=192.168.0.1:18515
-export PLE_RDMA_VERIFY=1
+export PLE_RDMA_VERIFY=0
 # fp8 kernel experiment E2: FP8 Marlin (small-M specialist, handles block
 # scales). E1 DeepGEMM rejected: SM120 kernels CUDA_ERROR_LAUNCH_FAILED on
 # GB10/sm121 (likely sm_120a-locked cubins). Marlin sits below cutlass, so

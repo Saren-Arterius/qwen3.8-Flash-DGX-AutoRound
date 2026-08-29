@@ -599,6 +599,11 @@ def apply(cls: type) -> None:
         # checkpoint (e.g. an FP8 copy of the table on local NVMe).
         model_path = os.environ.get("VLLM_PLE_MMAP_DIR") or self._ple_mmap_model_path
         have_dir = bool(model_path) and os.path.isdir(model_path)
+        if rdma_ep and not os.environ.get("VLLM_PLE_MMAP_DIR"):
+            # RDMA mode: never fall back to scanning the checkpoint dir (its
+            # ngram entries are stripped) — mmap participates only when a
+            # table dir is given explicitly.
+            have_dir = False
         if not have_dir and not rdma_ep:
             raise RuntimeError(
                 f"PLE mmap: table path {model_path!r} is not a local directory; "
