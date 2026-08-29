@@ -68,6 +68,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
+  -e VLLM_PLE_MMAP_FAST_ROWS="${PLE_FAST_ROWS:-512}" -e VLLM_PLE_MMAP_CHUNK="${PLE_CHUNK:-2048}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_PLE_MMAP_DIR=/ple-table \

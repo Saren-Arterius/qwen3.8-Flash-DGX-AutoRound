@@ -24,6 +24,13 @@ export MTP=3
 export PREFIX_CACHE=1
 # remote-RAM PLE + no cache headroom: single-page faults, no readahead waste
 export PLE_MADV_RANDOM=1
+# decode gathers (<=512 rows) were inline+serial (~50us/fault to remote RAM);
+# pooling them (FAST_ROWS=16, CHUNK=16, WORKERS=64) halves median cold-gather
+# latency in isolation. Measured NEUTRAL on tg: gather is ~3.5ms of a ~65ms
+# MTP decode step (~5%) - keep for cold-cache tails, don't expect tok/s.
+export PLE_FAST_ROWS=16
+export PLE_CHUNK=16
+export WORKERS=64
 # prefix-cache diagnosis: per-group hit breakdown, mamba publication,
 # eviction and chunk-stop logs (one-liners per request/step)
 export HIT_DEBUG=1
