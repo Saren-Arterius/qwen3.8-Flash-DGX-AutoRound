@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 
 # Required: the prepared checkpoint (int4 experts + int8 lm_head + fp8 side
 # layers — see tools/) and the stripped fp8 ngram/PLE table directory.
-export MODEL_DIR="/path/to/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound"
+export MODEL_DIR="/path/to/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
 export TABLE_DIR="/path/to/ple-table-fp8"
 
 export PORT=8000
