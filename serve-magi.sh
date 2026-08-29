@@ -36,10 +36,12 @@ export WORKERS=64
 # export HIT_DEBUG=1
 # perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
 export STEP_PROFILE=1
-# fp8 kernel experiment E1: vendored DeepGEMM has SM120 fp8 kernels; sits
-# above cutlass in _POSSIBLE_FP8_BLOCK_KERNELS. MoE is int4 Marlin — kept off.
-export USE_DEEP_GEMM=1
-export MOE_DEEP_GEMM=0
+# fp8 kernel experiment E2: FP8 Marlin (small-M specialist, handles block
+# scales). E1 DeepGEMM rejected: SM120 kernels CUDA_ERROR_LAUNCH_FAILED on
+# GB10/sm121 (likely sm_120a-locked cubins). Marlin sits below cutlass, so
+# cutlass must be disabled by name.
+# export FORCE_FP8_MARLIN=1
+# export DISABLED_KERNELS=CutlassFp8BlockScaledMMKernel
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 
 exec scripts/serve-intel-ar.sh
