@@ -35,6 +35,11 @@ EXTRA="${EXTRA:-}"
 SPLIT='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
 CC="${CC:--cc.cudagraph_mode=PIECEWISE -cc.splitting_ops=$SPLIT}"
 
+# FLASHINFER_AUTOTUNE=1 drops --no-enable-flashinfer-autotune (longer warmup,
+# possibly faster kernels; default off as inherited from the NVFP4 recipe).
+AT_ARG=--no-enable-flashinfer-autotune
+[ "${FLASHINFER_AUTOTUNE:-0}" = 1 ] && AT_ARG=
+
 SPEC=()
 if [ "$MTP" != 0 ]; then
   SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
@@ -64,6 +69,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" \
   -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
+  -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_PLE_MMAP_DIR=/ple-table \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
@@ -76,7 +82,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --max-model-len "$CTX" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GPU_MEM" \
     $PC_ARG --enable-chunked-prefill --max-num-batched-tokens 8192 \
     $CC \
-    --no-enable-flashinfer-autotune \
+    $AT_ARG \
     --kv-cache-dtype auto \
     $EXTRA \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \

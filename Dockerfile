@@ -92,3 +92,8 @@ RUN python3 /tmp/patch_hit_debug.py && rm /tmp/patch_hit_debug.py
 # repeated prompts only hit the prefix cache from the 3rd request on.
 COPY src/patch_mamba_align_split.py /tmp/patch_mamba_align_split.py
 RUN python3 /tmp/patch_mamba_align_split.py && rm /tmp/patch_mamba_align_split.py
+
+# On-demand torch.profiler around engine steps (VLLM_STEP_PROFILE=1 +
+# touch /tmp/profile_trigger). This vLLM predates VLLM_TORCH_PROFILER_DIR.
+COPY src/patch_step_profile.py /tmp/patch_step_profile.py
+RUN python3 /tmp/patch_step_profile.py && rm /tmp/patch_step_profile.py
