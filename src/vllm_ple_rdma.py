@@ -65,6 +65,21 @@ def _load_lib():
     return _lib
 
 
+def find_gid_index(dev_name):
+    """First IPv4-mapped RoCE v2 GID on port 1 — the index drifts across
+    reboots (interface bring-up order), so never hardcode it."""
+    base = f"/sys/class/infiniband/{dev_name}/ports/1"
+    for i in range(16):
+        try:
+            typ = open(f"{base}/gid_attrs/types/{i}").read().strip()
+            gid = open(f"{base}/gids/{i}").read().strip()
+        except OSError:
+            continue
+        if typ == "RoCE v2" and gid.startswith("0000:0000:0000:0000:0000:ffff:"):
+            return i
+    raise RuntimeError(f"no IPv4 RoCE v2 gid on {dev_name}")
+
+
 def _recv_json(sock):
     data = b""
     while not data.endswith(b"\n"):
@@ -134,7 +149,8 @@ class RdmaPleTable:
                  mmap_table=None):
         host, port = endpoint.rsplit(":", 1)
         dev = os.environ.get("VLLM_PLE_RDMA_DEV", "roceP2p1s0f0")
-        gid = int(os.environ.get("VLLM_PLE_RDMA_GID", "5"))
+        gid_env = os.environ.get("VLLM_PLE_RDMA_GID", "auto")
+        gid = find_gid_index(dev) if gid_env in ("auto", "") else int(gid_env)
         self.shard_size = int(shard_size)
         self.row_bytes = int(row_bytes)
         self.torch_dtype = torch_dtype
