@@ -80,3 +80,14 @@ ARG MAMBA_UTILS=${SP}/vllm/v1/worker/mamba_utils.py
 RUN cp ${MAMBA_UTILS} ${MAMBA_UTILS}.orig
 COPY src/mamba_utils_guarded.py ${MAMBA_UTILS}
 RUN python3 -c "import ast; ast.parse(open('${MAMBA_UTILS}').read()); print('mamba_utils.py guarded OK')"
+
+# prefix-cache diagnosis logging (VLLM_HIT_DEBUG=1): per-group hit breakdown,
+# mamba boundary-state publication, cached-block eviction, prefill chunk stops.
+COPY src/patch_hit_debug.py /tmp/patch_hit_debug.py
+RUN python3 /tmp/patch_hit_debug.py && rm /tmp/patch_hit_debug.py
+
+# prefill chunks must end at MAMBA block boundaries (1600), not the scheduler
+# minimum block size (8) — otherwise cold requests publish no mamba state and
+# repeated prompts only hit the prefix cache from the 3rd request on.
+COPY src/patch_mamba_align_split.py /tmp/patch_mamba_align_split.py
+RUN python3 /tmp/patch_mamba_align_split.py && rm /tmp/patch_mamba_align_split.py
