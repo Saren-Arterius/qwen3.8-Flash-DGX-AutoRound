@@ -1,5 +1,11 @@
 # How it works
 
+> **Upstream's doc, NVFP4-era.** The mmap-PLE story below is the foundation
+> this fork builds on, but every size and speed figure refers to the NVFP4
+> checkpoint that [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)
+> serves. This fork's checkpoint, numbers and serving path live in the
+> [README](../README.md).
+
 ## The memory problem
 
 Qwen3.8-Flash-Next is a sparse MoE with an unusual extra component: a **51B-parameter
@@ -63,7 +69,7 @@ attention — is stock vLLM.
 ## Three GB10 bugs this works around
 
 Bringing the official image up on a real Spark with real weights surfaced three
-issues. All are handled by the patch + the flags in `scripts/serve.sh`:
+issues. All are handled by the patch + the flags in `scripts/serve-intel-ar.sh`:
 
 1. **`Cannot copy between CPU and CUDA tensors during CUDA graph capture`.**
    The gather is CPU work plus a pageable host→device copy; that cannot live inside a
@@ -95,7 +101,10 @@ Measured on the GX10 with the mmap patch, `GPU_MEM=0.85`, MTP=2 unless noted.
 | YaRN, CTX 800000, MTP, `GPU_MEM=0.875` | Boots (pool 928k) and answers, but a 300k-token prefill got **SIGTERM from earlyoom** at 1.96% free memory: the prefill's activation peak plus the draft do not fit in ~5 GiB of headroom. |
 | `--kv-cache-dtype fp8` | **Refused by the model**: `NotImplementedError: Qwen3.8-Flash-Next QSA requires a BF16 main KV cache`. So the "halve the KV" lever does not exist; at ~29 KB/token a single 1M request needs ~30 GiB of KV. |
 
-Two YaRN-specific traps, both handled by `scripts/serve.sh`:
+Two YaRN-specific traps, both handled by upstream's `serve.sh`
+([blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX));
+this fork's `scripts/serve-intel-ar.sh` does not wire YaRN — pass the same
+flags via `EXTRA` if you want >262k:
 
 - YaRN is applied with Qwen's published `--hf-overrides` (rope `yarn`, factor 4,
   `original_max_position_embeddings` 262144) and needs `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1`.

@@ -3,7 +3,8 @@
 # Starts from the official Qwen3.8-Flash-Next vLLM image and appends one patch:
 # it serves the 51B-parameter n-gram ("PLE") table from disk via mmap instead of
 # keeping it resident in the 128 GB unified pool. That is the single change that
-# lets the ~176B (122 GiB NVFP4) checkpoint fit next to a real KV cache on one box.
+# lets the ~176B checkpoint (int4/int8/fp8 hybrid, ~71 GiB resident here;
+# 122 GiB NVFP4 upstream) fit next to a real KV cache on one box.
 #
 #   docker build -t qwen38-flash-dgx .
 #

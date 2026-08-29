@@ -1,218 +1,362 @@
 # AI Slop Warning
 Although the working vLLM is in my GB10, this fork is prepared by Mr. Claude so it's very likely something will break or cannot reproduce, ~~especially the claimed prefix cache fix part.~~ should be really fixed.
 
-# Qwen3.8-Flash-Next on a single DGX Spark (GB10)
+# Qwen3.8-Flash-Next on a single DGX Spark (GB10) — int4 + int8 + fp8 hybrid
 
 Run **Qwen3.8-Flash-Next** — a ~176B-parameter model (125B main + 51B n-gram, 6B
-active) — on **one NVIDIA DGX Spark / ASUS GX10** with **vLLM**, at full prefill
-speed, with MTP speculative decoding, and up to **500k tokens of context**.
+active) — on **one NVIDIA DGX Spark / ASUS GX10** with **vLLM**: **~49 tok/s
+single-stream decode with MTP=3** (~2,000 tok/s prefill), working **prefix
+caching**, and a **never-evict pin** that keeps your system prompt's KV resident
+through arbitrary traffic.
 
-The catch this repo solves: the NVFP4 checkpoint is **122 GiB**, which does not fit
-next to a usable KV cache in the Spark's **128 GB unified pool**. 44 GiB of that is
-the n-gram embedding ("PLE") table — a pure lookup that a token only touches 16 rows
-of. This repo adds one patch to the official vLLM image that **serves that table from
-NVMe via `mmap`** instead of keeping it resident. Weights drop to **~76 GiB**, the
-rest of the pool goes to KV, and everything runs on stock GB10 kernels.
+Forked from **[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)**,
+which established the foundation this fork stands on: the 44 GiB n-gram ("PLE")
+table is a pure lookup that a token only touches 16 rows of, so it is served
+**from NVMe via `mmap`** instead of living in the 128 GB unified pool
+(full story: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)). Upstream serves the
+official **NVFP4** checkpoint at 25–28 tok/s; for that path and its tuning
+guide, use upstream. This fork replaces the checkpoint with
+**[Intel's W4A16 AutoRound int4](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)**
+plus an int8 GPTQ lm_head and blockwise-fp8 side layers (all prepared by
+CPU-only tools in `tools/`), an **fp8** PLE table, and a set of GB10/vLLM
+patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same box.
 
-> **Independently reproduced** on a DGX Spark (not a GX10) by
+> **Upstream's NVFP4 recipe independently reproduced** on a DGX Spark by
 > [@jschmied](https://github.com/jschmied) — see
-> [issue #1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1) and their
+> [blazux#1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1) and their
 > [write-up](https://github.com/jschmied/qwen38-flash-next-gb10), which also
 > contributed the concurrency findings below.
 
-The result, versus the llama.cpp GGUF that was the only working option on a Spark
-before: **~4–5× faster prefill, MTP (which the GGUF cannot do), and 2× the context.**
+| | llama.cpp IQ4_XS | upstream (vLLM NVFP4) | **this fork (int4/int8/fp8)** |
+|---|---|---|---|
+| Prefill | ~540 tok/s | ~2,000–2,600 tok/s | **~2,000 tok/s** |
+| Decode, single stream | ~22 tok/s (no MTP) | 25–28 tok/s (MTP=2) | **~49 tok/s (MTP=3)** |
+| Prefix caching | — | off (GDN kernel bug) | **on** (+ never-evict pin) |
+| Context | 262k | 262k native / 500k YaRN | 262k native / 500k YaRN |
+| Weights resident | ~94 GiB (GGUF) | ~76 GiB | **~71 GiB** |
 
-> ## This fork: int4 + int8 + fp8 hybrid, ~49 tok/s
->
-> This fork replaces the NVFP4 checkpoint with
-> [Intel's W4A16 AutoRound int4](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)
-> plus an int8 GPTQ lm_head and blockwise-fp8 side layers (all prepared by the
-> CPU-only tools in `tools/`), an **fp8** PLE table, a GB10 Triton-tile fix for
-> the 36 GDN layers, a much faster PLE gather hot path, working **prefix
-> caching**, and an optional **never-evict pin** that keeps your system
-> prompt's KV resident. Measured on a DGX Spark: **~49 tok/s single-stream
-> decode with MTP=2** (~2,000 tok/s prefill) — vs 25–28 tok/s for the NVFP4
-> recipe below. The full recipe, per-patch docs, and checkpoint preparation:
-> **[docs/OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md)**; serve it with
-> `scripts/serve-intel-ar.sh`. Upstream's NVFP4 path (`scripts/serve.sh`)
-> still works unchanged.
+## Throughput and concurrency
 
-| | llama.cpp IQ4_XS | **this repo (vLLM NVFP4)** |
-|---|---|---|
-| Prefill | ~540 tok/s | **~2,000–2,600 tok/s** (warm page cache) |
-| Decode, single stream | ~22 tok/s (no MTP) | **25–28 tok/s** typical with MTP=2, up to ~36 on predictable text; ~17 without MTP |
-| Context | 262k | **262k native, 500k with YaRN** (needle found at 414k) |
-| Resident GPU memory | ~94 GiB (GGUF) | ~76 GiB weights + KV |
-| Aggregate throughput | single stream only | scales with concurrency — see below |
+Measured on this stack (DGX Spark, MTP=3 speculative decoding, prefix caching
+on, `SEQS=8`). Single-stream decode by workload — reproduce with
+[bench_qwen35.sh](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4/blob/master/bench_qwen35.sh)
+(from albond's 122B recipe) pointed at your endpoint; two runs, best of:
 
-*Measured on an ASUS GX10 (GB10, 128 GB). Prefill is the headline: Flash-Next's whole
-point is its sparse attention (QSA), and llama.cpp has no QSA kernel — it runs dense,
-so its prefill is its weakest axis. vLLM uses the real kernels.*
+| workload | tok/s |
+|---|---:|
+| Q&A | 46.1 |
+| Code | 49.1 |
+| JSON | **58.1** |
+| Math | 48.8 |
+| LongCode (2048 tok) | 47.2 |
 
----
+Structured output decodes fastest — MTP draft acceptance is highest on
+predictable text. Under concurrency and context depth — reproduce with
+[tool-eval-bench](https://github.com/SeraphimSerapis/tool-eval-bench)
+(`pp2048 tg128`; `d` = tokens already in context, `c` = concurrent streams):
+
+| depth | c | pp tok/s | tg tok/s | TTFT (ms) | total (ms) |
+|---|---|---:|---:|---:|---:|
+| d0 | 1 | 2,104 | 45.4 | 1,151 | 3,820 |
+| d0 | 2 | 1,519 | 50.3 | 2,668 | 7,038 |
+| d0 | 4 | 1,723 | 81.0 | 4,870 | 10,087 |
+| d4096 | 1 | 1,805 | 39.9 | 3,629 | 6,682 |
+| d4096 | 2 | 1,373 | 52.2 | 8,958 | 13,359 |
+| d4096 | 4 | 1,248 | 44.6 | 18,177 | 24,474 |
+| d8192 | 1 | 1,606 | 36.7 | 7,180 | 10,513 |
+| d8192 | 2 | 1,416 | 39.5 | 13,731 | 18,797 |
+| d8192 | 4 | 1,174 | 23.4 | 29,745 | 37,899 |
+
+The TTFT growth with concurrency is MTP's prefill cost (see the next
+section), not the paged table. On upstream's NVFP4 path
+[@jschmied](https://github.com/jschmied) measured aggregate throughput
+scaling to ~267 tok/s at 48 streams
+([load-and-waits.md](https://github.com/jschmied/qwen38-flash-next-gb10/blob/main/notes/load-and-waits.md));
+two portable takeaways: per-token page-fault cost *falls* with concurrency
+(batched tokens share n-gram rows), and a low `--max-num-seqs` silently
+queues requests — check `vllm:request_queue_time_seconds_sum` before quoting
+an aggregate number.
 
 ## Requirements
 
 - An **NVIDIA DGX Spark or compatible GB10 (sm_121)** box, 128 GB unified memory,
   aarch64, recent NVIDIA driver, Docker with the NVIDIA container runtime.
-- **~130 GB free disk** for the checkpoint, on reasonably fast storage (the table is
-  read from it at runtime — NVMe strongly recommended; the Spark's onboard NVMe is ideal).
+- **~130 GB free disk** for the checkpoint + fp8 PLE table, on reasonably fast
+  storage (the table is read at runtime — NVMe strongly recommended).
 - The base image is multi-arch, so `docker build` also works on x86 Blackwell
-  (sm_120, e.g. RTX PRO 6000) for testing, though this is tuned for the Spark.
+  (sm_120) for testing, though this is tuned for the Spark.
 
 ## Quickstart
 
 ```bash
-git clone https://github.com/blazux/qwen3.8-Flash-DGX.git
-cd qwen3.8-Flash-DGX
+git clone https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound.git
+cd qwen3.8-Flash-DGX-AutoRound
 
-docker build -t qwen38-flash-dgx .        # ~1 min: official image + one patch
-scripts/download-weights.sh               # ~122 GiB, resumable (one-time)
-scripts/serve.sh                          # boots on :18300 (~8 min to load)
-docker logs -f qwen38-flash               # wait for "Application startup complete"
-scripts/smoke-test.sh                     # health + coherence + prefill/decode numbers
+docker build -t qwen38-flash-dgx .   # official image + this fork's patches
+
+# The prepared checkpoint + PLE table (one-time, ~122 GiB):
+hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound
+hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 --local-dir /models/ple-table-fp8
+# (or build them yourself from Intel's release: ./prepare.sh — see below)
+
+# Point serve.sh at your checkpoint + table dirs, then:
+./serve.sh                           # boots on :8000 (~4 min with fastsafetensors)
+docker logs -f qwen38-flash          # wait for "Application startup complete"
 ```
 
 Then hit the OpenAI-compatible API:
 
 ```bash
-curl http://localhost:18300/v1/chat/completions -H 'Content-Type: application/json' -d '{
-  "model": "qwen3.8-flash-next",
+curl http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "qwen",
   "messages": [{"role":"user","content":"Write a haiku about a desktop supercomputer."}],
   "max_tokens": 512
 }'
 ```
 
-500k context (YaRN, validated with a needle-in-a-haystack at 414k tokens):
+`serve.sh` is a thin example config over `scripts/serve-intel-ar.sh` — every
+knob is an env var (table below). Keep your machine's real settings as an
+edited copy or a local-only commit on top.
+
+## Modify the weights yourself
+
+The quickstart's two `hf download` repos are the finished artifacts — hashes
+verified against the local originals. If you'd rather build (or audit) them
+yourself from
+[Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound),
+one script runs the whole pipeline (CPU-only — a NAS box is fine):
 
 ```bash
-YARN=1 CTX=500000 scripts/serve.sh
+./prepare.sh /models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound /models/ple-table-fp8
 ```
 
-## Tuning (env vars for `scripts/serve.sh`)
+Each step is explained in `prepare.sh`'s header comments: int8 lm_head repack,
+fp8 side-layer conversion, n-gram index strip, fp8 table fetch, and the
+`quantization_config` rewrite. On that last one: this vLLM build has no
+auto-round loader, but its GPTQ config (`AutoGPTQConfig` → Marlin kernels)
+reads the same packed tensors — the GPTQModel-style `dynamic` rules exclude
+the families that are not int4-packed and flip the head to 8-bit. The original
+AutoRound config is kept as `config.json.autoround`.
+
+## Serving
+
+```bash
+docker build -t qwen38-flash-dgx .
+MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound \
+TABLE_DIR=/models/ple-table-fp8 \
+PREFIX_CACHE=1 PIN_PROMPT="You are HomeBot, the household assistant." \
+scripts/serve-intel-ar.sh
+```
+
+or edit the paths in `serve.sh` (the example config used above) and run it.
 
 | Var | Default | Notes |
 |---|---|---|
-| `PORT` | `18300` | API port |
-| `CTX` | `262144` | Max context. Native is 262144; with `YARN=1` up to `500000` is validated. |
-| `YARN` | `0` | `1` = YaRN rope scaling (factor 4, Qwen's recipe) for `CTX` > 262144. |
-| `SEQS` | `8` | Max concurrent sequences. **Do not benchmark with 1–2**: excess requests queue silently and aggregate tok/s flatlines (see below). |
-| `GPU_MEM` | `0.85` | Fraction of the 128 GB pool for weights+KV. `0.875` got OOM-killed on a 300k-token prefill with MTP — keep the margin. On a Spark the OS and the GPU share this pool, and an OOM there can freeze the box. |
-| `MTP` | `2` | Speculative tokens from the model's MTP head (`0` = off). |
-| `KV_DTYPE` | `auto` | Keep `auto` (bf16): `fp8` is refused — the QSA layers require a bf16 KV cache. |
-| `PREWARM` | `0` | `1` streams the 48 GiB table once at boot to warm the page cache — steadier first-request latency, ~10 s extra startup. |
-| `WORKERS` | `32` | Threads used for the mmap gather. |
-| `EXTRA` | | Extra vLLM flags, passed verbatim. |
+| `MODEL_DIR` / `TABLE_DIR` | `/models/...` | Prepared checkpoint / fp8 PLE table dirs |
+| `PORT` | `18300` | API port (`serve.sh` sets 8000) |
+| `CTX` | `262144` | Max context |
+| `SEQS` | `8` | Max concurrent sequences (don't benchmark with 1–2, see below) |
+| `GPU_MEM` | `0.85` | Pool fraction. For deterministic sizing on the unified pool, use `GPU_MEM=0.01` + `KV_BYTES` instead — near-zero fraction plus an explicit KV pool means the driver never oversubscribes (`NV_ERR_NO_MEMORY` / Xid 31 freezes). |
+| `KV_BYTES` | unset | Explicit KV pool size (e.g. `20g`), passed as `--kv-cache-memory-bytes` |
+| `MTP` | `2` | Speculative tokens from the MTP head (`0` = off) |
+| `PREFIX_CACHE` | `0` | `1` enables prefix caching (recommended on this fork) |
+| `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
+| `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
+| `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1) |
+| `HIT_DEBUG` | `0` | Prefix-cache tracing (patch 8) |
+| `PREWARM` | `1` | Stream the table once at boot to warm the page cache |
+| `WORKERS` | `32` | Threads for the mmap gather |
+| `LOAD_FORMAT` | `fastsafetensors` | Noticeably faster cold boots |
+| `TOOL_PARSER` | `qwen3_coder` | Tool-call parser (`qwen3_xml` also works) |
+| `SERVED_NAME` | `qwen3.8-flash-next` | Model id on the API |
+| `EXTRA` | | Extra vLLM flags, passed verbatim |
 
-## Throughput and concurrency
+## Limitations & notes
 
-Single-stream numbers understate this model on a GB10. @jschmied traced one box
-under load (RadixArk NVFP4, 8k ctx, **no** speculative decoding, using vLLM's native
-PLE CPU offload rather than this repo's mmap — the table-serving cost behaves the
-same way) and found aggregate throughput scales far past single-stream:
+- **One big model at a time** — and on a Spark the OS and GPU share the pool;
+  prefer the deterministic `GPU_MEM=0.01` + `KV_BYTES` sizing over a large
+  fraction (an OOM inside the unified pool can freeze the box).
+- **1M context is out of reach on one box**: the QSA layers refuse an fp8 KV
+  cache, and in bf16 a single 1M request needs ~30 GiB of KV. 500k with YaRN
+  was upstream's validated ceiling.
+- **Weights are not included** and the checkpoint carries Qwen's license (with
+  a MAU/revenue clause) — review it before production use.
 
-| concurrent streams | aggregate tok/s | per stream | major faults / token | TTFT |
-|---:|---:|---:|---:|---:|
-| 1 | 17.1 | 17.1 | 16.0 | 0.22 s |
-| 8 | 87.5 | 10.9 | 7.0 | 0.53 s |
-| 16 | 131.6 | 8.2 | 9.6 | 0.83 s |
-| 32 | 212.0 | 6.6 | 4.3 | 1.19 s |
-| 48 | **266.8** | 5.6 | 3.6 | 1.60 s |
+## What runs in what precision
 
-Two things worth knowing (their words, lightly condensed):
+| Component | Precision | How |
+|---|---|---|
+| 512-expert MoE (48 layers + MTP layer's own 512) | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
+| lm_head (shared with MTP draft head) | **int8** GPTQ-Marlin (uint8b128) | `tools/quantize_lm_head_int8.py` + `"lm_head": true` |
+| GDN in/out projections, QSA q/k/v/o, shared expert | **fp8** blockwise e4m3 (128×128) | `tools/fp8_convert.py` + `src/vllm_fp8_hybrid.py` |
+| Embeddings, hyper-connections, norms, MoE gates, fc_hidden | bf16 | excluded via `dynamic` rules |
+| PLE n-gram table (51B params, layer 1) | **fp8** rows, mmapped from disk | `tools/fetch-ple-table-fp8.sh` + the mmap patch |
+| KV cache | bf16 | QSA refuses fp8 KV |
 
-- **The paged table is an argument *for* concurrency, not against it.** Page-fault cost
-  per token *falls* 4.4× from c=1 to c=48: batched tokens share n-gram rows and the
-  page cache keeps the hot set, so the marginal token is far cheaper than the first.
-  The table gather itself never exceeded ~25% of one CPU core.
-- **A low `--max-num-seqs` is indistinguishable from saturation if you only look at
-  tok/s.** With `--max-num-seqs 2` their sweep flatlined at ~33 tok/s while
-  `vllm:request_queue_time_seconds_sum` climbed to 142 s. Check `max-num-seqs` before
-  quoting an aggregate number — this repo's default is now `8` for that reason.
+## The patches
 
-Method and harness: [load-and-waits.md](https://github.com/jschmied/qwen38-flash-next-gb10/blob/main/notes/load-and-waits.md).
+Everything is applied at image build time (see the `Dockerfile`); each patch is
+independent and gated by an env var where it changes behavior.
 
-## How it fits — the one idea
+### 1. PLE mmap upgrades (`src/vllm_ple_mmap.py`, extends upstream's patch)
 
-A token's n-gram lookup reads **16 rows × 160 bytes ≈ 2.5 KB**. Over a 20k-token
-prefill that's ~1.3 GB of small reads — under a second on NVMe, and the hot n-grams
-stay in the page cache. So the 44 GiB table never needs to be in the unified pool:
-we `mmap` the checkpoint's `model-plefp8-*.safetensors` shards and gather rows on
-demand. Nothing else about the model changes — the hashing, dequant, and the sparse
-attention all run stock.
+- **Any table dtype**: bf16/f16 tables and fp8 (with `weight_scale`) are all
+  accepted; row size is derived from the safetensors headers. The fp8 table
+  halves the bytes read per token vs bf16.
+- **`VLLM_PLE_MMAP_DIR`**: the table no longer has to live inside the
+  checkpoint dir — point it at any directory of safetensors shards (NFS, local
+  NVMe, a RAM-backed device...). In our measurements the backend barely
+  matters once the page cache is warm; the gather is Python-dispatch-bound.
+- **Hot path**: per-step dedup of row ids on CPU (`np.unique`), gather of
+  unique rows only, staging through a persistent pinned buffer with an async
+  H2D copy, and GPU-side expansion via the inverse index. A decode fast path
+  (`VLLM_PLE_MMAP_FAST_ROWS`, default 512) skips the thread pool entirely for
+  small gathers. Net effect: ~7.2 → ~2.5–3.8 ms per lookup op.
+- **`VLLM_PLE_MMAP_MADV_RANDOM=1`**: `madvise(MADV_RANDOM)` the mmap so faults
+  stay single-page — for tables on remote RAM or boxes with no page-cache
+  headroom.
+- **Stats**: `VLLM_PLE_MMAP_STATS_SEC` (default 30) logs
+  `PLE mmap stats (last Ns): calls, op ms, gather ms, rows, MB` and resets the
+  counters each period.
 
-Full details, including the GB10-specific bugs this works around and the long-context
-findings, are in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+### 2. FLA shared-memory gate (`Dockerfile` sed)
 
-### Alternative: vLLM's native PLE CPU offload
+sm_121 reports 99 KiB of shared memory per block — the same as ADA, where the
+flash-linear-attention Triton kernels use their big GDN tiles — but the gate in
+`vllm/third_party/flash_linear_attention/ops/utils.py` demands 100 KiB, so all
+36 GDN layers silently fell back to small tiles. Lowering the gate to 99 KiB
+(101376) lets GB10 take the big-tile path. (Found the hard way in the
+Qwen3.5-122B Spark recipe — ported from
+[Entrpi/qwen3.5-122B-A10B-on-spark](https://github.com/Entrpi/qwen3.5-122B-A10B-on-spark)'s
+`patch_fla_shmem.py`.)
 
-vLLM ships its own path (`VLLM_PLE_CPU_OFFLOAD=1`) that keeps the table in pinned host
-RAM in a separate worker process. On a Spark that RAM is the same pool as the GPU, so
-it saves less than the mmap — but @jschmied got it running and documented two things
-you will need if you go that way (neither applies to the mmap patch, which is a single
-process):
+### 3. int8 lm_head enablement (`Dockerfile` sed on `model.py` / `mtp.py`)
 
-1. `_get_ple_embedding_quant_method()` in `ple_layer.py` only accepts `Fp8Config`;
-   with the NVFP4 checkpoint the quant config is `modelopt_fp4`, so the FP8 PLE shards
-   are rejected and loading dies on `ngram_embedding.weight_scale`. Accepting
-   `modelopt`/`modelopt_fp4` there fixes it.
-2. The worker hands CUDA tensors to the GPU process over IPC via `pidfd_getfd`, which
-   `kernel.yama.ptrace_scope=1` (the Ubuntu/DGX OS default) forbids between sibling
-   processes. In Docker: `--cap-add=SYS_PTRACE`. Under systemd:
-   `AmbientCapabilities=CAP_SYS_PTRACE`. It fails ~10 minutes in, after all shards
-   have loaded, with an unhelpful `Engine core initialization failed`.
+Upstream constructs `ParallelLMHead` without `quant_config`, forcing a bf16
+head (1.27 GiB, and a bf16 GEMV per token over a 248320 vocab). One added
+kwarg in both the main model and the MTP draft lets the head pick up the
+checkpoint's int8 GPTQ packing. Without the `mtp.py` half, MTP ≥ 3 crashes at
+load ("no module or parameter named 'lm_head.qweight'").
 
-Details: [results-radixark-vllm.md](https://github.com/jschmied/qwen38-flash-next-gb10/blob/main/notes/results-radixark-vllm.md).
+### 4. int4+fp8 hybrid dispatch (`src/vllm_fp8_hybrid.py`, `VLLM_FP8_HYBRID=1`)
+
+vLLM's GPTQ config quantizes listed layers and leaves the rest to
+`UnquantizedLinearMethod` — it has no notion of "this excluded layer is
+actually fp8 in the checkpoint". This shim wraps `AutoGPTQConfig`: it scans the
+checkpoint metadata for `F8_E4M3` weights with a `weight_scale_inv` sibling and
+routes exactly those layers to vLLM's blockwise-`Fp8Config`
+(`weight_block_size=[128,128]`, dynamic activation scheme) while everything
+else keeps the GPTQ path. `VLLM_USE_DEEP_GEMM=0` is required on sm_121
+(DeepGEMM hits `CUDA_ERROR_LAUNCH_FAILED`); the triton fallback is fine.
+
+### 5. Prefix caching: on, and fixed (`src/patch_mamba_align_split.py`)
+
+Upstream runs `--no-enable-prefix-caching` because of a CUBLAS error in the
+GDN `in_proj` GEMM on the cached-block path. With the fp8 side layers that
+GEMM runs a different kernel, and prefix caching is stable in our serving
+(`PREFIX_CACHE=1`).
+
+It also *works properly* now. On this hybrid model the reconciled cache hit is
+the **minimum across all KV cache groups** (full attention + four mamba/GDN
+state groups), and mamba "align" mode can only cache a state at a prefill
+chunk end on a 1600-token boundary. The image's scheduler aligned those chunk
+ends to `cache_config.block_size` — which the engine rewrites to the *minimum*
+group block size (8, the MTP draft granularity) — so chunks ended where no
+mamba state was cacheable, a cold request published **zero** reusable mamba
+states, and a repeated prompt only got fast on the **3rd** try (the miss
+triggers junction machinery that rebuilds the boundary one request late).
+Long prompts effectively never hit. The patch makes the split use
+`cache_config.mamba_block_size` (1600). Verified: an 8k-token repeat goes
+10.1 s → **0.90 s on the 2nd request**.
+
+Notes: the prefix-cache granularity is large (1600 tokens; shorter prefixes
+get no reuse), and a repeat hit tops out at `round_down(P,1600) − 1600` — MTP
+(eagle-style) always recomputes the last matched block.
+
+### 6. Never-evict prompt pinning (`src/patch_never_evict.py`)
+
+`--never-evict-kv-cache-prompt-includes "<substring of your system prompt>"`
+pins the KV blocks of any prompt containing that marker: they are held in a
+side queue on `BlockPool`, excluded from the free count, and thus never handed
+out for eviction — your assistant's system prompt stays cached no matter what
+other traffic does. `--never-evict-kv-cache-max-fraction` (default 0.25) caps
+the pin. The pin set is *replaced* on each matching request, so an updated
+system prompt releases the old blocks automatically.
+
+Verified end-to-end: a pinned 8k prompt still answers in **0.94 s after 2M
+tokens of unique traffic** (3.1× full KV-pool turnover).
+
+Implementation notes: the marker is tokenized once and matched as a token-id
+subsequence (first/last token dropped — BPE merges at the boundaries); the pin
+is keyed on block *hashes*, not block ids, because this hybrid model frees
+mamba/GDN state blocks mid-request — each freed block is re-claimed by the pin
+the moment `free_blocks()` sees it. Only prefix-cacheable KV groups
+participate (the MTP draft layer's group is not, and must be skipped). This is
+a pin-only port of our `arc_pin2` patch from the Qwen3.5-122B Spark stack,
+which built the pin on top of the ARC GPU-eviction work in
+[vllm#40270](https://github.com/vllm-project/vllm/pull/40270); the ARC/2Q
+policies themselves were deliberately dropped — the stock free queue is
+C-speed on a path this model hits every step.
+
+Self-check (no GPU): `docker run --rm -v "$PWD/src:/t" --entrypoint python3
+qwen38-flash-dgx /t/test_never_evict_pin.py`.
+
+### 7. Mamba state-copy guard (`src/mamba_utils_guarded.py`)
+
+Hardens the align-mode state-copy kernels against the "CUDA illegal memory
+access / Xid 31 under load" crash class (also
+[blazux#2](https://github.com/blazux/qwen3.8-Flash-DGX/issues/2)): backports
+[vllm#50729](https://github.com/vllm-project/vllm/pull/50729) (overlapping
+state-copy race) and bounds-checks every block id against its state pool
+before dereferencing — an out-of-range id skips the copy and bumps a counter
+(logged as `mamba state-copy guard`) instead of taking down the CUDA context.
+
+### 8. Prefix-cache tracing (`src/patch_hit_debug.py`, `HIT_DEBUG=1`)
+
+Set `HIT_DEBUG=1` (→ `VLLM_HIT_DEBUG=1` in the container) to log, per request:
+the per-KV-group hit reconciliation (which group truncated the hit), mamba
+boundary-state publication (which slots were real/null/hashed), cached-block
+evictions, and prefill chunk-stop decisions. This is what found the bug in
+patch 5; costs nothing when off.
+
+## Speculative decoding and TTFT
+
+MTP raises decode substantially but puts a floor (~0.8 s) under
+time-to-first-token: vLLM's v1 engine only emits the first token after the
+drafter has run, and MTP's draft layer is a stateful autoregressive
+transformer — on every prefill chunk it must run a full-chunk-width forward
+(always eager: above the cudagraph capture sizes) to sync its own KV/GDN
+state, plus k−1 sequential single-token passes. Cross-attention drafters like
+DFlash don't pay this, but Flash-Next has no such drafter — MTP is what ships
+in the checkpoint. If your workload is TTFT-sensitive, weigh `MTP` depth
+against `MTP=0`; only 0 removes the floor.
 
 ## What's in here
 
 ```
-Dockerfile                 official vLLM Flash-Next image + the patches below
-src/vllm_ple_mmap.py       mmap PLE table (any dtype, relocatable dir, fast gather)
-src/vllm_fp8_hybrid.py     int4+fp8 hybrid dispatch on the GPTQ config (this fork)
-src/patch_never_evict.py   never-evict system-prompt KV pinning (this fork)
-src/test_ple_mmap_cpu.py   CPU unit test for the gather (no GPU needed)
-src/test_never_evict_pin.py  CPU unit test for the pin (no GPU needed)
-scripts/download-weights.sh
-scripts/serve.sh           upstream NVFP4 serving
-scripts/serve-intel-ar.sh  int4/int8/fp8 hybrid serving (this fork)
-scripts/smoke-test.sh
-tools/                     CPU-only checkpoint preparation (this fork)
-docs/HOW-IT-WORKS.md       the original mmap-PLE story
-docs/OPTIMIZATIONS.md      this fork's recipe, patch by patch
+Dockerfile                    official vLLM Flash-Next image + the patches above
+serve.sh                      example launcher config (edit paths, run)
+prepare.sh                    build the checkpoint + table from Intel's release
+src/vllm_ple_mmap.py          mmap PLE table (any dtype, relocatable dir, fast gather)
+src/vllm_fp8_hybrid.py        int4+fp8 hybrid dispatch on the GPTQ config
+src/patch_never_evict.py      never-evict system-prompt KV pinning
+src/patch_mamba_align_split.py  prefix-cache chunk-alignment fix
+src/patch_hit_debug.py        prefix-cache tracing (VLLM_HIT_DEBUG)
+src/mamba_utils_guarded.py    hardened align-mode state copy (vllm#50729 + guard)
+src/test_ple_mmap_cpu.py      CPU unit test for the gather (no GPU needed)
+src/test_never_evict_pin.py   CPU unit test for the pin (no GPU needed)
+scripts/serve-intel-ar.sh     the docker run behind serve.sh
+scripts/smoke-test.sh         health + coherence + prefill/decode numbers
+tools/                        CPU-only checkpoint preparation
+docs/HOW-IT-WORKS.md          upstream's mmap-PLE story
 ```
-
-Run the unit test (no GPU):
-
-```bash
-docker run --rm -v "$PWD/src:/t" -w /t --entrypoint python3 \
-  qwen38-flash-dgx test_ple_mmap_cpu.py
-```
-
-## Limitations & notes
-
-- **One big model at a time.** At `GPU_MEM=0.85` this uses most of the 128 GB pool;
-  don't co-locate another large model (an 8B embedding model next to it already
-  starves the KV cache — we moved ours to another machine).
-- **`--no-enable-prefix-caching` is required on the NVFP4 path** (a GB10 GDN kernel
-  bug corrupts on the cached-block path) and **full `torch.compile` is off** (an
-  Inductor int64-indexing assert on sm_121); the serve script sets both. On this
-  fork's fp8-hybrid path the affected GEMM runs a different kernel and prefix
-  caching works — `PREFIX_CACHE=1` in `scripts/serve-intel-ar.sh`.
-- **1M context is out of reach on one box**: the QSA layers refuse an fp8 KV cache, and
-  in bf16 a single 1M request needs ~30 GiB of KV. 500k with YaRN is the validated
-  ceiling; 800k booted but got OOM-killed on a long prefill.
-- Decode without MTP is a touch slower than the GGUF, because the gather does one
-  host↔device sync per step; MTP more than makes up for it. Removing that sync
-  (pinned staging buffer) is a natural next optimization — PRs welcome.
-- **Weights are not included** and the checkpoint carries Qwen's license (with a
-  MAU/revenue clause) — review it before production use.
 
 ## Credits
 
 - Model: **Qwen team, Alibaba** — Qwen3.8-Flash-Next.
-- NVFP4 checkpoint: **[RadixArk/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4)**.
+- **This is a fork of [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)** —
+  the original mmap-PLE idea, the GB10 serving recipe, the NVFP4 path, and
+  docs/HOW-IT-WORKS.md are theirs.
 - int4 checkpoint this fork builds on: **[Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound](https://huggingface.co/Intel/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound)**
   (AutoRound); fp8 PLE table from **[Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8)**.
 - Several pieces originate in the Qwen3.5-122B-A10B Spark recipes:
@@ -225,8 +369,8 @@ docker run --rm -v "$PWD/src:/t" -w /t --entrypoint python3 \
   and re-ported here.
 - Serving engine and base image: **vLLM** (`vllm/vllm-openai:qwen38-flash-next`,
   the `release/qwen38next` recipe / PR #53896).
-- Independent reproduction on a DGX Spark, the native-offload fixes and the
-  concurrency measurements: **[@jschmied](https://github.com/jschmied)**
-  ([issue #1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1),
+- Independent reproduction of the upstream recipe, the native-offload fixes and
+  the concurrency measurements: **[@jschmied](https://github.com/jschmied)**
+  ([blazux#1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1),
   [qwen38-flash-next-gb10](https://github.com/jschmied/qwen38-flash-next-gb10)).
-- The mmap-PLE patch and the GB10 serving recipe in this repo: see [LICENSE](LICENSE) (Apache-2.0).
+- License: [Apache-2.0](LICENSE).
