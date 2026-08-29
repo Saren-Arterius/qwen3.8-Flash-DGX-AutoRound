@@ -82,6 +82,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_PLE_RDMA_VERIFY="${PLE_RDMA_VERIFY:-0}" \
   -e VLLM_PLE_RDMA_DEV="${PLE_RDMA_DEV:-roceP2p1s0f0}" \
   -e VLLM_PLE_RDMA_GID="${PLE_RDMA_GID:-5}" \
+  -e VLLM_PLE_RDMA_PREFETCH="${PLE_RDMA_PREFETCH:-1}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \

@@ -106,4 +106,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends libibverbs-dev 
 COPY src/ple_rdma/ple_rdma.c /tmp/ple_rdma.c
 RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs \
       -o /usr/local/lib/python3.12/dist-packages/libple_rdma.so && rm /tmp/ple_rdma.c
-COPY src/ple_rdma/ple_rdma.py /usr/local/lib/python3.12/dist-packages/ple_rdma.py
+COPY src/vllm_ple_rdma.py /usr/local/lib/python3.12/dist-packages/vllm_ple_rdma.py

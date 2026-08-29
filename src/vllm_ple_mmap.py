@@ -230,95 +230,6 @@ class MmapPleTable:
 # --------------------------------------------------------------------------- #
 # Placeholder that stands in for VocabParallelEmbedding
 # --------------------------------------------------------------------------- #
-class RdmaPleTable:
-    """Row gather via one-sided RDMA READs against the wtako table daemon.
-
-    Same duck-type as MmapPleTable (gather/row_bytes/torch_dtype/rows_total).
-    VLLM_PLE_RDMA=<host:port> selects it; VLLM_PLE_RDMA_VERIFY=1 cross-checks
-    every RDMA row against the mmap table (requires the mmap dir; temporary,
-    Phase-2 soak only). If the server holds a shard subset, missing rows fall
-    back to the mmap table.
-    """
-
-    def __init__(self, endpoint: str, shard_size: int, row_bytes: int,
-                 torch_dtype: torch.dtype, rows_total: int,
-                 mmap_table: "MmapPleTable | None") -> None:
-        import ple_rdma
-
-        host, port = endpoint.rsplit(":", 1)
-        dev = os.environ.get("VLLM_PLE_RDMA_DEV", "roceP2p1s0f0")
-        gid = _env_int("VLLM_PLE_RDMA_GID", 5)
-        self.client = ple_rdma.Client(host, int(port), dev, gid)
-        if self.client.remote["row_bytes"] != row_bytes:
-            raise RuntimeError("PLE rdma: row_bytes mismatch with server")
-        self.shard_size = int(shard_size)
-        self.row_bytes = int(row_bytes)
-        self.torch_dtype = torch_dtype
-        self.rows_total = int(rows_total)
-        self.mmap_table = mmap_table
-        self.verify = _env_int("VLLM_PLE_RDMA_VERIFY", 0) and mmap_table is not None
-        self.loaded = np.asarray(sorted(self.client.remote["loaded_shards"]))
-        self.full = self.loaded.size * self.shard_size >= self.rows_total
-        if not self.full and mmap_table is None:
-            raise RuntimeError("PLE rdma: server holds a subset and no mmap fallback")
-        logger.info(
-            "PLE rdma: %s dev=%s gid=%d, %d/%d shards served%s",
-            endpoint, dev, gid, self.loaded.size,
-            -(-self.rows_total // self.shard_size),
-            ", VERIFY mode" if self.verify else "",
-        )
-
-    def gather(self, ids: np.ndarray) -> np.ndarray:
-        import time as _time
-
-        t0 = _time.perf_counter()
-        try:
-            return self._gather(ids)
-        finally:
-            _STATS["gather_ms"] += (_time.perf_counter() - t0) * 1e3
-            _STATS["rows"] += int(np.asarray(ids).size)
-            _STATS["bytes"] += int(np.asarray(ids).size) * self.row_bytes
-
-    def _gather(self, ids: np.ndarray) -> np.ndarray:
-        ids = np.ascontiguousarray(ids, dtype=np.int64).reshape(-1)
-        if ids.size == 0:
-            return np.empty((0, self.row_bytes), dtype=np.uint8)
-        if ids.min() < 0 or ids.max() >= self.rows_total:
-            raise IndexError(
-                f"PLE rdma: row id out of range [{ids.min()}, {ids.max()}]"
-            )
-        served = self.full
-        if not served:
-            mask = np.isin(ids // self.shard_size, self.loaded)
-            served = bool(mask.all())
-        if not served:
-            out = self.mmap_table._gather(ids)
-            if mask.any():
-                rdma_rows = self._read(ids[mask])
-                if self.verify and not np.array_equal(rdma_rows, out[mask]):
-                    logger.error("PLE rdma VERIFY MISMATCH (mixed batch)")
-                    _STATS["rdma_mismatch"] = _STATS.get("rdma_mismatch", 0) + 1
-            return out
-        out = self._read(ids)
-        if self.verify:
-            ref = self.mmap_table._gather(ids)
-            if not np.array_equal(out, ref):
-                bad = int((out != ref).any(axis=1).sum())
-                logger.error("PLE rdma VERIFY MISMATCH: %d/%d rows", bad, ids.size)
-                _STATS["rdma_mismatch"] = _STATS.get("rdma_mismatch", 0) + bad
-                return ref
-        return out
-
-    def _read(self, ids: np.ndarray) -> np.ndarray:
-        cap = self.client.max_rows
-        if ids.size <= cap:
-            return self.client.read_rows(ids).copy()
-        out = np.empty((ids.size, self.row_bytes), dtype=np.uint8)
-        for a in range(0, ids.size, cap):
-            out[a:a + cap] = self.client.read_rows(ids[a:a + cap])
-        return out
-
-
 class _MmapNgramEmbedding(nn.Module):
     """Duck-types the bits of VocabParallelEmbedding the PLE code reads.
 
@@ -348,6 +259,14 @@ class _MmapNgramEmbedding(nn.Module):
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         table = self.table
+        if getattr(_PREFETCH, "on", False) and hasattr(table, "prefetch"):
+            # batch-assembly hash: kick off the async RDMA fetch, return a
+            # dummy — the real rows are consumed later by _lookup_impl.
+            table.prefetch(ids)
+            return torch.empty(
+                (*ids.shape, self.embedding_dim),
+                dtype=table.torch_dtype, device=ids.device,
+            )
         if table is None:
             # Weights never loaded (e.g. --load-format dummy): keep the plumbing
             # alive with zeros so kernel tests can run without the 44 GiB table.
@@ -463,6 +382,7 @@ _OP_NAME = "ple_mmap_lookup"
 
 # Aggregate gather-overhead stats, logged every VLLM_PLE_MMAP_STATS_SEC seconds
 # (0 = off). op_ms covers hashing + gather + H2D; gather_ms just the disk reads.
+_PREFETCH = __import__("threading").local()  # set by vllm_ple_rdma during the batch-assembly hash
 _STATS = {"calls": 0, "op_ms": 0.0, "gather_ms": 0.0, "rows": 0, "bytes": 0}
 _STATS_LAST = [0.0]
 _STATS_SEC = _env_int("VLLM_PLE_MMAP_STATS_SEC", 30)
@@ -481,10 +401,12 @@ def _stats_log() -> None:
         return
     logger.info(
         "PLE mmap stats (last %.0fs): %d ops, op %.0f ms total (%.2f ms/op), "
-        "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read",
+        "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read, "
+        "prefetch hit %d miss %d",
         elapsed, s["calls"], s["op_ms"], s["op_ms"] / s["calls"],
         s["gather_ms"], s["gather_ms"] / s["calls"],
         s["rows"], s["bytes"] / 2**20,
+        s.get("rdma_pf_hit", 0), s.get("rdma_pf_miss", 0),
     )
     s.update(calls=0, op_ms=0.0, gather_ms=0.0, rows=0, bytes=0)
 
@@ -500,10 +422,18 @@ def _lookup_impl(
 
     t0 = _time.perf_counter()
     layer = _REGISTRY[layer_name]
-    result = layer._ple_mmap_orig_forward_impl(
-        None, input_ids, query_start_loc, ngram_context
-    )
-    output[: result.shape[0]].copy_(result.to(output.dtype))
+    table = getattr(layer.ngram_embedding, "table", None)
+    consume = getattr(table, "consume", None)
+    got = None
+    if consume is not None and output.dtype.itemsize == 1:
+        got = consume(output.numel() // table.row_bytes, output.device)
+    if got is not None:
+        output.copy_(got.view(output.dtype).reshape(output.shape))
+    else:
+        result = layer._ple_mmap_orig_forward_impl(
+            None, input_ids, query_start_loc, ngram_context
+        )
+        output[: result.shape[0]].copy_(result.to(output.dtype))
     _STATS["calls"] += 1
     _STATS["op_ms"] += (_time.perf_counter() - t0) * 1e3
     _stats_log()
@@ -650,6 +580,8 @@ def apply(cls: type) -> None:
             # of head_dim bytes; the global scale comes from the server hello.
             row_bytes = mmap_table.row_bytes if mmap_table else int(self.head_dim)
             torch_dtype = mmap_table.torch_dtype if mmap_table else torch.float8_e4m3fn
+            from vllm_ple_rdma import RdmaPleTable
+
             table = RdmaPleTable(rdma_ep, shard_size, row_bytes, torch_dtype,
                                  vocab, mmap_table)
             if not hasattr(self, "_offload_weight_scale"):
