@@ -4,7 +4,7 @@
 # generic and rebases cleanly on git pull.
 cd "$(dirname "$0")"
 
-export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound"
+export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound"
 export TABLE_DIR=/mnt/ple-ram
 # seq=8 + prefix cache + stock FLA gate: A/B for the 2026-08-28 CUDA
 # illegal-access crashes (both on prefix-cache resume steps). If stable, the
@@ -36,6 +36,10 @@ export WORKERS=64
 # export HIT_DEBUG=1
 # perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
 export STEP_PROFILE=1
+# fp8 kernel experiment E1: vendored DeepGEMM has SM120 fp8 kernels; sits
+# above cutlass in _POSSIBLE_FP8_BLOCK_KERNELS. MoE is int4 Marlin — kept off.
+export USE_DEEP_GEMM=1
+export MOE_DEEP_GEMM=0
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 
 exec scripts/serve-intel-ar.sh
