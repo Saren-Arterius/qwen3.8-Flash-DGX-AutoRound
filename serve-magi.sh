@@ -33,7 +33,9 @@ export PLE_CHUNK=16
 export WORKERS=64
 # prefix-cache diagnosis: per-group hit breakdown, mamba publication,
 # eviction and chunk-stop logs (one-liners per request/step)
-export HIT_DEBUG=1
+# export HIT_DEBUG=1
+# perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
+export STEP_PROFILE=1
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 
 exec scripts/serve-intel-ar.sh
