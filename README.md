@@ -35,47 +35,24 @@ patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same bo
 | Context | 262k | 262k native / 500k YaRN | 262k native / 500k YaRN |
 | Weights resident | ~94 GiB (GGUF) | ~76 GiB | **~71 GiB** |
 
-## Throughput and concurrency
+## Throughput
 
 Measured on this stack (DGX Spark, MTP=3 speculative decoding, prefix caching
 on, `SEQS=8`). Single-stream decode by workload — reproduce with
 [bench_qwen35.sh](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4/blob/master/bench_qwen35.sh)
 (from albond's 122B recipe) pointed at your endpoint; two runs, best of:
 
-| workload | tok/s |
-|---|---:|
-| Q&A | 46.1 |
-| Code | 49.1 |
-| JSON | **58.1** |
-| Math | 48.8 |
-| LongCode (2048 tok) | 47.2 |
 
-Structured output decodes fastest — MTP draft acceptance is highest on
-predictable text. Under concurrency and context depth — reproduce with
-[tool-eval-bench](https://github.com/SeraphimSerapis/tool-eval-bench)
-(`pp2048 tg128`; `d` = tokens already in context, `c` = concurrent streams):
+| Task | Prompt Tokens | Gen Tokens | Time (s) | Speed (tok/s) |
+| --- | --- | --- | --- | --- |
+| **[Q&A]** | 65 | 55.7 ± 5.0 | 1.16 ± 0.11 | 48.1 ± 3.3 |
+| **[Code]** | 72 | 424.8 ± 95.8 | 8.52 ± 2.38 | 50.5 ± 3.8 |
+| **[JSON]** | 90 | 843.0 ± 23.2 | 13.39 ± 0.68 | 62.9 ± 1.6 |
+| **[Math]** | 71 | 64.0 ± 0.0 | 1.20 ± 0.02 | 53.1 ± 1.0 |
+| **[LongCode]** | 79 | 2048.0 ± 0.0 | 41.40 ± 4.47 | 49.9 ± 5.3 |
 
-| depth | c | pp tok/s | tg tok/s | TTFT (ms) | total (ms) |
-|---|---|---:|---:|---:|---:|
-| d0 | 1 | 2,104 | 45.4 | 1,151 | 3,820 |
-| d0 | 2 | 1,519 | 50.3 | 2,668 | 7,038 |
-| d0 | 4 | 1,723 | 81.0 | 4,870 | 10,087 |
-| d4096 | 1 | 1,805 | 39.9 | 3,629 | 6,682 |
-| d4096 | 2 | 1,373 | 52.2 | 8,958 | 13,359 |
-| d4096 | 4 | 1,248 | 44.6 | 18,177 | 24,474 |
-| d8192 | 1 | 1,606 | 36.7 | 7,180 | 10,513 |
-| d8192 | 2 | 1,416 | 39.5 | 13,731 | 18,797 |
-| d8192 | 4 | 1,174 | 23.4 | 29,745 | 37,899 |
+*Note: Results show the arithmetic mean across all 6 benchmark runs with standard deviation given as the bias margin.*
 
-The TTFT growth with concurrency is MTP's prefill cost (see the next
-section), not the paged table. On upstream's NVFP4 path
-[@jschmied](https://github.com/jschmied) measured aggregate throughput
-scaling to ~267 tok/s at 48 streams
-([load-and-waits.md](https://github.com/jschmied/qwen38-flash-next-gb10/blob/main/notes/load-and-waits.md));
-two portable takeaways: per-token page-fault cost *falls* with concurrency
-(batched tokens share n-gram rows), and a low `--max-num-seqs` silently
-queues requests — check `vllm:request_queue_time_seconds_sum` before quoting
-an aggregate number.
 
 ## Requirements
 
