@@ -390,3 +390,75 @@ docs/HOW-IT-WORKS.md          upstream's mmap-PLE story
   ([blazux#1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1),
   [qwen38-flash-next-gb10](https://github.com/jschmied/qwen38-flash-next-gb10)).
 - License: [Apache-2.0](LICENSE).
+
+
+## PLE table over RDMA (only if you're crazy enough)
+
+This branch's production setup does not mmap the table from storage at all:
+a ~200-line daemon on the NAS pins all 33 fp8 shards (~49 GiB) into RAM as
+**one contiguous ibverbs memory region**, hands each client
+`(gid, qpn, rkey, addr, geometry)` over a tiny TCP handshake, then idles —
+every gather is a batch of **one-sided RDMA READs** of 160-byte rows,
+initiated by the Spark, zero server CPU per request. Code: `src/ple_rdma/`
+(`ple_rdma.c` + ctypes wrapper, shared by both ends); vLLM side:
+`src/vllm_ple_rdma.py`.
+
+Why bother: gather latency drops to **~1.3 ms/op** vs 5–9 ms from local NVMe
+and 30–50 ms from NFS — ~42 vs ~36 tok/s single-stream decode (see main's
+README appendix). So: **~+15% decode**, 49 GiB of local NVMe and its page-cache
+pressure back, and the warm glow of having built it. That's the whole payoff;
+decide accordingly.
+
+You need: **RoCE v2** between the boxes (this setup: a 100 Gb link,
+Spark ↔ NAS), a NAS with **≥64 GB RAM** (49 GiB gets pinned, `memlock`
+unlimited), `libibverbs` on both ends, `gcc` + python3-numpy on the NAS.
+
+**Server (NAS)** — copy `src/ple_rdma/` over, then:
+
+```bash
+gcc -O2 -Wall -shared -fPIC ple_rdma.c -libverbs -o libple_rdma.so
+./ple_rdma_server.py /path/to/ple-table-fp8 --dev <ibdev> --gid <rocev2-gid> --port 18515
+```
+
+(`ibv_devinfo` for the device name; `show_gids`-style tooling or
+`/sys/class/infiniband/*/ports/1/gid_attrs/types/*` for the RoCE v2 GID
+index. `--shards 0-3` serves a subset for smoke tests.)
+
+As a systemd unit:
+
+```ini
+[Unit]
+Description=PLE table RDMA server (one-sided READ target)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=you
+LimitMEMLOCK=infinity
+ExecStart=/usr/bin/python3 /opt/ple_rdma/ple_rdma_server.py /path/to/ple-table-fp8
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Client (Spark)** — serve with an empty `TABLE_DIR` and:
+
+| Var | Default | Notes |
+|---|---|---|
+| `PLE_RDMA` | unset | `<nas-ip>:18515` — enables the RDMA path |
+| `PLE_RDMA_DEV` | `roceP2p1s0f0` | Spark-side ibverbs device |
+| `PLE_RDMA_GID` | `auto` | auto-detects the RoCE v2 GID index |
+| `PLE_RDMA_PREFETCH` | `1` | batch-assembly prefetch; measured neutral here |
+| `PLE_RDMA_VERIFY` | `0` | `1` = cross-check every gather against a local mmap table (`TABLE_DIR` set too); soak passed with zero mismatches before the cutover |
+
+**Sanity first**: `ple_test_client.py <server> <table-dir-over-nfs>` reads
+random rows via RDMA and byte-compares them against the safetensors source.
+
+Fine print: both ends must serve the *same table build* (wire order is sorted
+shard filenames); the server has **no auth and no encryption** — trusted LAN
+only; there is no reconnect logic — if the server bounces, restart the vLLM
+container; the table is gone from RAM on every NAS reboot (the daemon reloads
+it in under a minute).
