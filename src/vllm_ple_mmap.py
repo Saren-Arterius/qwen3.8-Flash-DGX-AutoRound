@@ -32,6 +32,11 @@ Knobs (env):
   VLLM_PLE_MMAP_PREWARM=0    1 = stream the whole table once at load to fill the
                              page cache with whatever memory is free (harmless,
                              evictable; ~10 s at 4.7 GB/s)
+  VLLM_PLE_MMAP_PREFETCH=0   EXPERIMENTAL: 1 = run the n-gram hash at batch
+                             assembly and gather rows in a worker thread, so
+                             the mid-layer-1 lookup op only copies ready rows
+                             (hides the page-fault latency behind layer-0
+                             compute). Off by default; lightly tested.
 
 Install: the Dockerfile copies this file next to vllm and appends
 ``_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)`` to the end of
@@ -230,6 +235,137 @@ class MmapPleTable:
 # --------------------------------------------------------------------------- #
 # Placeholder that stands in for VocabParallelEmbedding
 # --------------------------------------------------------------------------- #
+class PrefetchingMmapTable:
+    """EXPERIMENTAL (VLLM_PLE_MMAP_PREFETCH=1): wrap MmapPleTable with the
+    prefetch pipeline — the n-gram ids are hashed at batch-assembly time (a
+    hook on Qwen3_8FlashNextModelState.prepare_inputs), a worker thread does
+    the mmap gather into a pinned buffer while the GPU runs layer 0, and the
+    lookup op consumes ready rows (tiny H2D + reshape, no np.unique). Dummy/
+    capture runs bypass the hook and fall back to the sync gather, which is
+    also the safety net for any shape mismatch. Off by default."""
+
+    _SLOT = 1 << 17  # 131072 rows = an 8192-token chunk x 16 heads
+
+    def __init__(self, inner: MmapPleTable) -> None:
+        import queue
+        import threading
+
+        self.inner = inner
+        self.row_bytes = inner.row_bytes
+        self.torch_dtype = inner.torch_dtype
+        self.rows_total = inner.rows_total
+        self.rows_t = torch.empty((2 * self._SLOT, inner.row_bytes),
+                                  dtype=torch.uint8, pin_memory=True)
+        self.ids_t = torch.empty((2 * self._SLOT,), dtype=torch.int64,
+                                 pin_memory=True)
+        self._q: "queue.Queue" = queue.Queue()
+        self._jobs = [None, None]
+        self._pending = None
+        self._slot = 0
+        threading.Thread(target=self._worker, daemon=True,
+                         name="ple-mmap-pf").start()
+        _patch_model_state_prefetch()
+
+    def gather(self, ids: np.ndarray) -> np.ndarray:  # sync fallback path
+        return self.inner.gather(ids)
+
+    def prefetch(self, ids: torch.Tensor) -> None:
+        import threading
+
+        n = ids.numel()
+        if n == 0 or n > self._SLOT:
+            return
+        slot = self._slot
+        self._slot ^= 1
+        prev = self._jobs[slot]
+        if prev is not None and not prev["done"].wait(5.0):
+            logger.error("PLE prefetch: slot %d stuck, skipping", slot)
+            return
+        base = slot * self._SLOT
+        self.ids_t[base:base + n].copy_(ids.reshape(-1), non_blocking=True)
+        ev = torch.cuda.Event()
+        ev.record()
+        job = {"ev": ev, "n": n, "base": base, "ok": False,
+               "done": threading.Event()}
+        self._jobs[slot] = job
+        self._pending = job
+        self._q.put(job)
+
+    def _worker(self) -> None:
+        ids_np = self.ids_t.numpy()
+        rows_np = self.rows_t.numpy()
+        while True:
+            job = self._q.get()
+            try:
+                job["ev"].synchronize()  # hash + ids D2H done
+                n, base = job["n"], job["base"]
+                rows_np[base:base + n] = self.inner._gather(
+                    ids_np[base:base + n])
+                job["ok"] = True
+            except Exception:
+                logger.exception("PLE prefetch: worker error")
+            finally:
+                job["done"].set()
+
+    def consume(self, want_rows: int, device) -> "torch.Tensor | None":
+        job, self._pending = self._pending, None
+        if job is None or job["n"] != want_rows or not job["done"].wait(5.0) \
+                or not job["ok"]:
+            _STATS["pf_miss"] = _STATS.get("pf_miss", 0) + 1
+            return None
+        _STATS["pf_hit"] = _STATS.get("pf_hit", 0) + 1
+        rows = self.rows_t[job["base"]:job["base"] + job["n"]]
+        return rows.to(device, non_blocking=True)
+
+
+_MS_PATCHED = False
+
+
+def _patch_model_state_prefetch() -> None:
+    """Hook prepare_inputs (batch assembly, outside torch.compile) to run the
+    n-gram hash early; the placeholder embedding sees _PREFETCH.on and starts
+    the async gather instead of a sync one."""
+    global _MS_PATCHED
+    if _MS_PATCHED:
+        return
+    _MS_PATCHED = True
+    try:
+        from vllm.models.qwen3_8_flash_next.nvidia.model_state import (
+            Qwen3_8FlashNextModelState,
+        )
+    except ImportError:
+        logger.warning("PLE prefetch: model_state not found, prefetch disabled")
+        return
+
+    orig = Qwen3_8FlashNextModelState.prepare_inputs
+
+    def prepare_inputs(self, input_batch, req_states):
+        out = orig(self, input_batch, req_states)
+        try:
+            qsl = out.get("query_start_loc")
+            ctx = out.get("ngram_context")
+            ids = out.get("input_ids")
+            if ids is None:
+                ids = getattr(input_batch, "input_ids", None)
+            if ids is not None and qsl is not None and ctx is not None:
+                layers = list(_REGISTRY.values())
+                if len(layers) == 1 and hasattr(
+                        getattr(layers[0].ngram_embedding, "table", None),
+                        "prefetch"):
+                    _PREFETCH.on = True
+                    try:
+                        layers[0]._ple_mmap_orig_forward_impl(
+                            None, ids, qsl, ctx)
+                    finally:
+                        _PREFETCH.on = False
+        except Exception:
+            logger.exception("PLE prefetch: hook error (sync fallback)")
+        return out
+
+    Qwen3_8FlashNextModelState.prepare_inputs = prepare_inputs
+    logger.info("PLE prefetch: hook installed on prepare_inputs")
+
+
 class _MmapNgramEmbedding(nn.Module):
     """Duck-types the bits of VocabParallelEmbedding the PLE code reads.
 
@@ -259,6 +395,14 @@ class _MmapNgramEmbedding(nn.Module):
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         table = self.table
+        if getattr(_PREFETCH, "on", False) and hasattr(table, "prefetch"):
+            # batch-assembly hash: kick off the async prefetch, return a
+            # dummy — the real rows are consumed later by _lookup_impl.
+            table.prefetch(ids)
+            return torch.empty(
+                (*ids.shape, self.embedding_dim),
+                dtype=table.torch_dtype, device=ids.device,
+            )
         if table is None:
             # Weights never loaded (e.g. --load-format dummy): keep the plumbing
             # alive with zeros so kernel tests can run without the 44 GiB table.
@@ -374,6 +518,7 @@ _OP_NAME = "ple_mmap_lookup"
 
 # Aggregate gather-overhead stats, logged every VLLM_PLE_MMAP_STATS_SEC seconds
 # (0 = off). op_ms covers hashing + gather + H2D; gather_ms just the disk reads.
+_PREFETCH = __import__("threading").local()  # set during the batch-assembly hash
 _STATS = {"calls": 0, "op_ms": 0.0, "gather_ms": 0.0, "rows": 0, "bytes": 0}
 _STATS_LAST = [0.0]
 _STATS_SEC = _env_int("VLLM_PLE_MMAP_STATS_SEC", 30)
@@ -392,10 +537,12 @@ def _stats_log() -> None:
         return
     logger.info(
         "PLE mmap stats (last %.0fs): %d ops, op %.0f ms total (%.2f ms/op), "
-        "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read",
+        "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read, "
+        "prefetch hit %d miss %d",
         elapsed, s["calls"], s["op_ms"], s["op_ms"] / s["calls"],
         s["gather_ms"], s["gather_ms"] / s["calls"],
         s["rows"], s["bytes"] / 2**20,
+        s.get("pf_hit", 0), s.get("pf_miss", 0),
     )
     s.update(calls=0, op_ms=0.0, gather_ms=0.0, rows=0, bytes=0)
 
@@ -411,10 +558,18 @@ def _lookup_impl(
 
     t0 = _time.perf_counter()
     layer = _REGISTRY[layer_name]
-    result = layer._ple_mmap_orig_forward_impl(
-        None, input_ids, query_start_loc, ngram_context
-    )
-    output[: result.shape[0]].copy_(result.to(output.dtype))
+    table = getattr(layer.ngram_embedding, "table", None)
+    consume = getattr(table, "consume", None)
+    got = None
+    if consume is not None and output.dtype.itemsize == 1:
+        got = consume(output.numel() // table.row_bytes, output.device)
+    if got is not None:
+        output.copy_(got.view(output.dtype).reshape(output.shape))
+    else:
+        result = layer._ple_mmap_orig_forward_impl(
+            None, input_ids, query_start_loc, ngram_context
+        )
+        output[: result.shape[0]].copy_(result.to(output.dtype))
     _STATS["calls"] += 1
     _STATS["op_ms"] += (_time.perf_counter() - t0) * 1e3
     _stats_log()
@@ -517,44 +672,47 @@ def apply(cls: type) -> None:
         if not m:
             raise RuntimeError(f"PLE mmap: cannot find layer index in {self._ple_mmap_prefix!r}")
         layer_idx = int(m.group(1))
-        shards, dtype_str, scale_entry = _find_shards(model_path, layer_idx)
-        if not shards:
-            raise RuntimeError(f"PLE mmap: no shard tensors for layer {layer_idx} under {model_path}")
-        cols = shards.pop("__cols__")  # type: ignore[arg-type]
-        if cols != self.head_dim:
-            raise RuntimeError(f"PLE mmap: shard width {cols} != head_dim {self.head_dim}")
-        if dtype_str not in _TABLE_DTYPES:
-            raise RuntimeError(f"PLE mmap: unsupported shard dtype {dtype_str}")
-        if dtype_str in _FP8_DTYPES and not hasattr(self, "_offload_weight_scale"):
-            if scale_entry is None:
-                raise RuntimeError("PLE mmap: FP8 shards without ngram_embedding.weight_scale")
-            self.register_buffer(
-                "_offload_weight_scale",
-                _read_scale(scale_entry).to(torch.accelerator.current_accelerator()),
-                persistent=False,
-            )
         parts = int(self.split_ngram_parts)
         vocab = int(self.ngram_embedding.org_vocab_size)
         shard_size = math.ceil(vocab / parts)
-        for idx, (_p, _o, rows) in shards.items():
-            expected = max(0, min(shard_size, vocab - idx * shard_size))
-            if rows != expected:
-                raise RuntimeError(
-                    f"PLE mmap: shard {idx} has {rows} rows, expected {expected}"
+        if True:  # (indentation kept to minimize the diff)
+            shards, dtype_str, scale_entry = _find_shards(model_path, layer_idx)
+            if not shards:
+                raise RuntimeError(f"PLE mmap: no shard tensors for layer {layer_idx} under {model_path}")
+            cols = shards.pop("__cols__")  # type: ignore[arg-type]
+            if cols != self.head_dim:
+                raise RuntimeError(f"PLE mmap: shard width {cols} != head_dim {self.head_dim}")
+            if dtype_str not in _TABLE_DTYPES:
+                raise RuntimeError(f"PLE mmap: unsupported shard dtype {dtype_str}")
+            if dtype_str in _FP8_DTYPES and not hasattr(self, "_offload_weight_scale"):
+                if scale_entry is None:
+                    raise RuntimeError("PLE mmap: FP8 shards without ngram_embedding.weight_scale")
+                self.register_buffer(
+                    "_offload_weight_scale",
+                    _read_scale(scale_entry).to(torch.accelerator.current_accelerator()),
+                    persistent=False,
                 )
-        table = MmapPleTable(
-            shards, shard_size, cols * _itemsize(dtype_str), _TABLE_DTYPES[dtype_str],
-            workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
-            chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
-        )
+            for idx, (_p, _o, rows) in shards.items():
+                expected = max(0, min(shard_size, vocab - idx * shard_size))
+                if rows != expected:
+                    raise RuntimeError(
+                        f"PLE mmap: shard {idx} has {rows} rows, expected {expected}"
+                    )
+            mmap_table = MmapPleTable(
+                shards, shard_size, cols * _itemsize(dtype_str), _TABLE_DTYPES[dtype_str],
+                workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
+                chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
+            )
+        table = mmap_table
         if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
             logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
             table.prewarm()
+        if _env_int("VLLM_PLE_MMAP_PREFETCH", 0):
+            table = PrefetchingMmapTable(mmap_table)
         self.ngram_embedding.table = table
         logger.info(
-            "PLE mmap: layer %d, %d shards, %d rows x %d B (%.1f GiB on disk), dtype %s, %d workers",
-            layer_idx, len(shards), table.rows_total, table.row_bytes,
-            table.rows_total * table.row_bytes / 2**30, dtype_str, table.pool._max_workers,
+            "PLE table ready: layer %d, %d rows x %d B, backend %s",
+            layer_idx, table.rows_total, table.row_bytes, type(table).__name__,
         )
 
     def forward_impl(self, hidden_states, input_ids, query_start_loc, ngram_context,
