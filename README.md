@@ -390,3 +390,43 @@ docs/HOW-IT-WORKS.md          upstream's mmap-PLE story
   ([blazux#1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1),
   [qwen38-flash-next-gb10](https://github.com/jschmied/qwen38-flash-next-gb10)).
 - License: [Apache-2.0](LICENSE).
+
+## Appendix: where to put the PLE table (and why not to bother with `PLE_PREFETCH`)
+
+Batch-1 decode bench (`bench/decode_bench.py`, medians of 3; W1 = fresh-prompt
+1000-token decode, W2 = pinned ~8k prefix hit + 256 tokens; DGX Spark GB10,
+MTP=3). Only the table location and the prefetch flag change between rows (all local NVMe is Gen 4):
+
+| table source              | prefetch | W1 tok/s | W2 tok/s | gather      |
+|---------------------------|----------|----------|----------|-------------|
+| RDMA row daemon           | on       | 42.4     | 47.8     | ~1.3 ms/op  |
+| RDMA row daemon           | off      | 41.6     | 46.7     | ~1.3 ms/op  |
+| local NVMe                | off      | 36.5     | 45.7     | 5–9 ms/op   |
+| local NVMe                | on       | 34.5     | 42.6     | 9–17 ms/op  |
+| local NVMe, warm cache    | on       | 33.4     | 41.5     | 9–16 ms/op  |
+| NFS (RDMA mount, btrfs)   | on       | 26.2     | 36.5     | 26–56 ms/op |
+| NFS (RDMA mount, btrfs)   | off      | 24.2     | 32.9     | 30–42 ms/op |
+
+Takeaways:
+
+- **Put the table on local NVMe.** It costs ~15% decode vs an exotic fast row
+  source, and it is the simple recipe. Serving straight off a NAS works but
+  costs ~40% (and that was NFS-over-RDMA to a btrfs box — a plain GbE NAS
+  will be worse).
+- **Don't bother with `PLE_PREFETCH=1`** (`VLLM_PLE_MMAP_PREFETCH`). The
+  batch-assembly prefetch only wins where the row source is very slow (NFS,
+  +2–3 tok/s, within run-to-run variance), is a wash on fast sources, and is
+  **net-negative on local NVMe**: the handoff/wait in `consume()` costs more
+  than the inline gather it replaces (confirmed on a warm page cache). It
+  stays experimental and default-off.
+- TTFT is unaffected by any of this (the MTP drafter floor dominates), and
+  between-restart variance on this bench is >10% — treat small deltas above
+  accordingly.
+
+About those "RDMA row daemon" rows: that is a custom one-sided RDMA READ
+server that pins the whole table in another box's RAM — the fastest row
+source measured, at the price of a second machine and an ibverbs science
+project. If you have a NAS with **≥64 GB of RAM** and a **≥100 Gbit RDMA
+link** to your Spark — and no second DGX Spark to put to better use — the
+[`magi` branch](../../tree/magi) ships the tool (`src/ple_rdma/`) and setup
+notes ("PLE table over RDMA"). Everyone else: local NVMe is the recipe.
