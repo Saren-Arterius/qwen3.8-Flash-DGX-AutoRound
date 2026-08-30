@@ -115,7 +115,9 @@ curl http://localhost:8000/v1/chat/completions -H 'Content-Type: application/jso
 ```
 
 `serve.sh` is a thin example config over `scripts/serve-intel-ar.sh` — every
-knob is an env var (table below). Keep your machine's real settings as an
+knob is an env var. The defaults below are `serve.sh`'s (the recommended
+entry point); where the bare `scripts/serve-intel-ar.sh` falls back to
+something else, the note says so. Keep your machine's real settings as an
 edited copy or a local-only commit on top.
 
 ## Modify the weights yourself
@@ -150,16 +152,16 @@ scripts/serve-intel-ar.sh
 
 or edit the paths in `serve.sh` (the example config used above) and run it.
 
-| Var | Default | Notes |
+| Var | `serve.sh` default | Notes |
 |---|---|---|
-| `MODEL_DIR` / `TABLE_DIR` | `/models/...` | Prepared checkpoint / fp8 PLE table dirs. On this branch `TABLE_DIR=""` + `PLE_RDMA=<ip>:<port>` skips the mmap dir entirely and serves rows over RDMA (see the RDMA section) |
-| `PORT` | `18300` | API port (`serve.sh` sets 8000) |
+| `MODEL_DIR` / `TABLE_DIR` | `/path/to/...` — edit these | Prepared checkpoint / fp8 PLE table dirs. On this branch `TABLE_DIR=""` + `PLE_RDMA=<ip>:<port>` skips the mmap dir entirely and serves rows over RDMA (see the RDMA section) |
+| `PORT` | `8000` | API port (bare script: `18300`) |
 | `CTX` | `262144` | Max context |
 | `SEQS` | `8` | Max concurrent sequences (don't benchmark with 1–2, see below) |
-| `GPU_MEM` | `0.85` | Pool fraction. For deterministic sizing on the unified pool, use `GPU_MEM=0.01` + `KV_BYTES` instead — near-zero fraction plus an explicit KV pool means the driver never oversubscribes (`NV_ERR_NO_MEMORY` / Xid 31 freezes). |
-| `KV_BYTES` | unset | Explicit KV pool size (e.g. `20g`), passed as `--kv-cache-memory-bytes` |
-| `MTP` | `2` | Speculative tokens from the MTP head (`0` = off) |
-| `PREFIX_CACHE` | `0` | `1` enables prefix caching (recommended on this fork) |
+| `GPU_MEM` | `0.01` | Near-zero pool fraction, paired with `KV_BYTES`: deterministic sizing, so the driver never oversubscribes the unified pool (`NV_ERR_NO_MEMORY` / Xid 31 freezes). Bare script: a `0.85` fraction — avoid on unified-memory boxes. |
+| `KV_BYTES` | `20g` | Explicit KV pool size, passed as `--kv-cache-memory-bytes` (bare script: unset) |
+| `MTP` | `3` | Speculative tokens from the MTP head (`0` = off; bare script: `2`) |
+| `PREFIX_CACHE` | `1` | Prefix caching — fixed and recommended on this fork (bare script: `0`) |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
 | `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1) |
@@ -167,8 +169,8 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `PREWARM` | `1` | Stream the table once at boot to warm the page cache |
 | `WORKERS` | `32` | Threads for the mmap gather |
 | `LOAD_FORMAT` | `fastsafetensors` | Noticeably faster cold boots |
-| `TOOL_PARSER` | `qwen3_coder` | Tool-call parser (`qwen3_xml` also works) |
-| `SERVED_NAME` | `qwen3.8-flash-next` | Model id on the API |
+| `TOOL_PARSER` | `qwen3_xml` | Tool-call parser (bare script: `qwen3_coder`) |
+| `SERVED_NAME` | `qwen` | Model id on the API (bare script: `qwen3.8-flash-next`) |
 | `EXTRA` | | Extra vLLM flags, passed verbatim |
 
 ## Limitations & notes
