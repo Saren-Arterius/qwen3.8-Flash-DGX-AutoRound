@@ -152,7 +152,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 
 | Var | Default | Notes |
 |---|---|---|
-| `MODEL_DIR` / `TABLE_DIR` | `/models/...` | Prepared checkpoint / fp8 PLE table dirs |
+| `MODEL_DIR` / `TABLE_DIR` | `/models/...` | Prepared checkpoint / fp8 PLE table dirs. On this branch `TABLE_DIR=""` + `PLE_RDMA=<ip>:<port>` skips the mmap dir entirely and serves rows over RDMA (see the RDMA section) |
 | `PORT` | `18300` | API port (`serve.sh` sets 8000) |
 | `CTX` | `262144` | Max context |
 | `SEQS` | `8` | Max concurrent sequences (don't benchmark with 1–2, see below) |
@@ -199,6 +199,11 @@ Everything is applied at image build time (see the `Dockerfile`); each patch is
 independent and gated by an env var where it changes behavior.
 
 ### 1. PLE mmap upgrades (`src/vllm_ple_mmap.py`, extends upstream's patch)
+
+> On this branch the mmap gather is the *generic* path. Production here
+> serves the rows over one-sided RDMA instead (`src/vllm_ple_rdma.py`,
+> `TABLE_DIR=""` + `PLE_RDMA` — see "PLE table over RDMA" below); the
+> mmap dir remains the fallback and backs `PLE_RDMA_VERIFY=1`.
 
 - **Any table dtype**: bf16/f16 tables and fp8 (with `weight_scale`) are all
   accepted; row size is derived from the safetensors headers. The fp8 table
@@ -354,6 +359,8 @@ Dockerfile                    official vLLM Flash-Next image + the patches above
 serve.sh                      example launcher config (edit paths, run)
 prepare.sh                    build the checkpoint + table from Intel's release
 src/vllm_ple_mmap.py          mmap PLE table (any dtype, relocatable dir, fast gather)
+src/vllm_ple_rdma.py          PLE rows via one-sided RDMA READ (this branch's prod path)
+src/ple_rdma/                 the RDMA daemon, C helper (libple_rdma.so) + test client
 src/vllm_fp8_hybrid.py        int4+fp8 hybrid dispatch on the GPTQ config
 src/patch_never_evict.py      never-evict system-prompt KV pinning
 src/patch_mamba_align_split.py  prefix-cache chunk-alignment fix
