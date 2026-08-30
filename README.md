@@ -10,7 +10,7 @@ caching**, and a **never-evict pin** that keeps your system prompt's KV resident
 through arbitrary traffic.
 
 Forked from **[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)**,
-which established the foundation this fork stands on: the 44 GiB n-gram ("PLE")
+which established the foundation this fork stands on: the ~49 GiB fp8 n-gram ("PLE")
 table is a pure lookup that a token only touches 16 rows of, so it is served
 **from NVMe via `mmap`** instead of living in the 128 GB unified pool
 (full story: [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)). Upstream serves the
@@ -100,7 +100,7 @@ hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 --local-dir /models/ple-table
 # (or build them yourself from Intel's release: ./prepare.sh — see below)
 
 # Point serve.sh at your checkpoint + table dirs, then:
-./serve.sh                           # boots on :8000 (~4 min with fastsafetensors)
+./serve.sh                           # boots on :8000 (~5 min with fastsafetensors)
 docker logs -f qwen38-flash          # wait for "Application startup complete"
 ```
 
@@ -208,13 +208,15 @@ independent and gated by an env var where it changes behavior.
   halves the bytes read per token vs bf16.
 - **`VLLM_PLE_MMAP_DIR`**: the table no longer has to live inside the
   checkpoint dir — point it at any directory of safetensors shards (NFS, local
-  NVMe, a RAM-backed device...). In our measurements the backend barely
-  matters once the page cache is warm; the gather is Python-dispatch-bound.
+  NVMe, a RAM-backed device...). The backend matters: the ~49 GiB table
+  outgrows what the page cache can keep warm next to the model, so gathers
+  cost ~1.3 ms/op from a RAM-backed source vs 5–9 ms from local NVMe vs
+  30–50 ms over NFS — decode impact in the appendix below.
 - **Hot path**: per-step dedup of row ids on CPU (`np.unique`), gather of
   unique rows only, staging through a persistent pinned buffer with an async
   H2D copy, and GPU-side expansion via the inverse index. A decode fast path
   (`VLLM_PLE_MMAP_FAST_ROWS`, default 512) skips the thread pool entirely for
-  small gathers. Net effect: ~7.2 → ~2.5–3.8 ms per lookup op.
+  small gathers. Net effect: ~7.2 → ~2.5–3.8 ms per lookup op on a RAM-backed table.
 - **`VLLM_PLE_MMAP_MADV_RANDOM=1`**: `madvise(MADV_RANDOM)` the mmap so faults
   stay single-page — for tables on remote RAM or boxes with no page-cache
   headroom.
@@ -366,8 +368,10 @@ src/test_ple_mmap_cpu.py      CPU unit test for the gather (no GPU needed)
 src/test_never_evict_pin.py   CPU unit test for the pin (no GPU needed)
 scripts/serve-intel-ar.sh     the docker run behind serve.sh
 scripts/smoke-test.sh         health + coherence + prefill/decode numbers
+bench/decode_bench.py         batch-1 decode / TTFT / spec-acceptance bench
 tools/                        CPU-only checkpoint preparation
 docs/HOW-IT-WORKS.md          upstream's mmap-PLE story
+docs/OPTIMIZATIONS.md         this fork's patches in depth
 ```
 
 ## Credits
