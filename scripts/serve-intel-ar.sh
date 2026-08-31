@@ -22,6 +22,7 @@ MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound}"
 TABLE_DIR="${TABLE_DIR-/models/ple-table-fp8}"
 PORT="${PORT:-18300}"
 CTX="${CTX:-262144}"
+YARN="${YARN:-0}"
 SEQS="${SEQS:-8}"
 GPU_MEM="${GPU_MEM:-0.85}"
 MTP="${MTP:-2}"
@@ -47,9 +48,23 @@ AT_ARG=--no-enable-flashinfer-autotune
 TABLE_ARGS=()
 [ -n "${TABLE_DIR:-}" ] && TABLE_ARGS=(-v "$TABLE_DIR:/ple-table:ro" -e VLLM_PLE_MMAP_DIR=/ple-table)
 
+# YaRN (Qwen's published recipe) to go past the native 262144.
+OVR_ARGS=()
+YARN_OVR='{"text_config": {"rope_parameters": {"mrope_interleaved": true, "mrope_section": [11, 11, 10], "rope_type": "yarn", "rope_theta": 10000000, "partial_rotary_factor": 0.25, "factor": 4.0, "original_max_position_embeddings": 262144}}}'
+ALLOW_LONG=0
+if [ "$YARN" != 0 ]; then OVR_ARGS=(--hf-overrides "$YARN_OVR"); ALLOW_LONG=1; fi
+
+# MTP + YaRN: dict hf_overrides are not propagated to the draft model, whose
+# max_model_len then stays 262144 and vLLM aborts with
+# "--mamba-block-size can only be set with --enable-prefix-caching". Forcing the
+# draft's max_model_len through the speculative config fixes it.
 SPEC=()
 if [ "$MTP" != 0 ]; then
-  SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
+  if [ "$YARN" != 0 ]; then
+    SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP},\"max_model_len\":${CTX}}")
+  else
+    SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":${MTP}}")
+  fi
 fi
 
 # PREFIX_CACHE=1: upstream disabled prefix caching over a CUBLAS error in the
@@ -91,7 +106,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_USE_DEEP_GEMM_E8M0="${DEEP_GEMM_E8M0:-1}" \
   -e VLLM_TEST_FORCE_FP8_MARLIN="${FORCE_FP8_MARLIN:-0}" \
   -e VLLM_DISABLED_KERNELS="${DISABLED_KERNELS:-}" \
-  -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+  -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
   -e CUDA_LAUNCH_BLOCKING="${CUDA_LAUNCH_BLOCKING:-0}" \
   "$IMAGE" \
   /model --served-model-name "${SERVED_NAME:-qwen3.8-flash-next}" \
@@ -101,7 +116,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
     $CC \
     $AT_ARG \
     --kv-cache-dtype auto \
-    $EXTRA \
+    "${OVR_ARGS[@]}" $EXTRA \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 

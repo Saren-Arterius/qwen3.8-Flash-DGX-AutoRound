@@ -5,13 +5,18 @@
 cd "$(dirname "$0")"
 
 export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound"
+export FP8_HYBRID=1  # vendor build has no fp8 tensors
 # no local table since the 2026-08-30 RDMA cutover: /mnt/ple-ram is swap-only,
 # rows come from wtako's ple-rdma-server (PLE_RDMA below)
 export TABLE_DIR=
 # seq=8 + prefix cache + stock FLA gate: A/B for the 2026-08-28 CUDA
 # illegal-access crashes (both on prefix-cache resume steps). If stable, the
 # lowered FLA shmem gate (big GDN tiles at 99KiB) was the culprit.
-export SEQS=8
+
+# export YARN=1
+# export CTX=1000000
+
+export SEQS=16
 export TOOL_PARSER=qwen3_xml
 export PORT=8000
 export SERVED_NAME=qwen
@@ -37,7 +42,7 @@ export WORKERS=64
 # eviction and chunk-stop logs (one-liners per request/step)
 # export HIT_DEBUG=1
 # perf campaign: on-demand step profiler (touch /tmp/profile_trigger in ctr)
-export STEP_PROFILE=1
+export STEP_PROFILE=0
 # PLE table over RDMA from the wtako daemon (phase-2 VERIFY soak passed with
 # zero mismatches; mmap dir dropped at the phase-3 cutover)
 export PLE_RDMA=192.168.0.1:18515
