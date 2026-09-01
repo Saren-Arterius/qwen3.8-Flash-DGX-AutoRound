@@ -29,7 +29,7 @@ MTP="${MTP:-2}"
 PREWARM="${PREWARM:-1}"
 TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 EXTRA="${EXTRA:-}"
-# KV_BYTES: size the KV cache explicitly (e.g. 13.2g) instead of by
+# KV_BYTES: size the KV cache explicitly (e.g. 20g) instead of by
 # gpu-memory-utilization fraction — deterministic footprint on unified-memory
 # boxes where "free memory" profiling is unreliable. Pair with a tiny GPU_MEM.
 [ -n "${KV_BYTES:-}" ] && EXTRA="--kv-cache-memory-bytes $KV_BYTES $EXTRA"
@@ -83,6 +83,9 @@ if [ -n "$PIN_PROMPT" ] && [ "${PREFIX_CACHE:-0}" = 1 ]; then
            --never-evict-kv-cache-max-fraction "${PIN_MAX_FRACTION:-0.25}")
 fi
 
+# The VLLM_PLE_MMAP_* knobs (WORKERS/PREWARM/MADV_RANDOM/FAST_ROWS/CHUNK)
+# configure the mmap backend only — with PLE_RDMA set they are passed
+# through but ignored (RDMA mode is exclusive).
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
 docker run -d --name "$NAME" --restart unless-stopped \
@@ -94,18 +97,13 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_PLE_MMAP_FAST_ROWS="${PLE_FAST_ROWS:-512}" -e VLLM_PLE_MMAP_CHUNK="${PLE_CHUNK:-2048}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_PLE_RDMA="${PLE_RDMA:-}" \
-  -e VLLM_PLE_RDMA_VERIFY="${PLE_RDMA_VERIFY:-0}" \
   -e VLLM_PLE_RDMA_DEV="${PLE_RDMA_DEV:-roceP2p1s0f0}" \
   -e VLLM_PLE_RDMA_GID="${PLE_RDMA_GID:-auto}" \
   -e VLLM_PLE_RDMA_PREFETCH="${PLE_RDMA_PREFETCH:-1}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
-  -e VLLM_USE_DEEP_GEMM="${USE_DEEP_GEMM:-0}" \
-  -e VLLM_MOE_USE_DEEP_GEMM="${MOE_DEEP_GEMM:-0}" \
-  -e VLLM_USE_DEEP_GEMM_E8M0="${DEEP_GEMM_E8M0:-1}" \
-  -e VLLM_TEST_FORCE_FP8_MARLIN="${FORCE_FP8_MARLIN:-0}" \
-  -e VLLM_DISABLED_KERNELS="${DISABLED_KERNELS:-}" \
+  -e VLLM_USE_DEEP_GEMM=0 \
   -e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$ALLOW_LONG" \
   -e CUDA_LAUNCH_BLOCKING="${CUDA_LAUNCH_BLOCKING:-0}" \
   "$IMAGE" \
