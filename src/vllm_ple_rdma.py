@@ -14,12 +14,17 @@ exchange). This module provides:
   np.unique.
 
 Env: VLLM_PLE_RDMA=<host:port> (selection happens in vllm_ple_mmap),
-VLLM_PLE_RDMA_DEV / _GID, VLLM_PLE_RDMA_PREFETCH=1 (default on),
-VLLM_PLE_RDMA_VERIFY=1 (needs a local mmap table dir).
+VLLM_PLE_RDMA_DEV / _GID, VLLM_PLE_RDMA_PREFETCH=1 (default on).
+
+No fallback: every READ (prefetch worker and lookup-time alike) retries
+forever, reconnecting every 2 s, and the engine stalls until it succeeds
+— a connection hiccup can never silently change where rows come from.
+The mmap-backed VERIFY/subset modes were removed with it.
 """
 import ctypes
 import json
 import os
+import time
 import queue
 import socket
 import threading
@@ -143,10 +148,9 @@ class _Job:
 
 class RdmaPleTable:
     """Duck-types MmapPleTable (gather/row_bytes/torch_dtype/rows_total) and
-    adds the prefetch pipeline. mmap_table (optional) backs subset/VERIFY."""
+    adds the prefetch pipeline. RDMA-only: no mmap fallback exists."""
 
-    def __init__(self, endpoint, shard_size, row_bytes, torch_dtype, rows_total,
-                 mmap_table=None):
+    def __init__(self, endpoint, shard_size, row_bytes, torch_dtype, rows_total):
         host, port = endpoint.rsplit(":", 1)
         dev = os.environ.get("VLLM_PLE_RDMA_DEV", "roceP2p1s0f0")
         gid_env = os.environ.get("VLLM_PLE_RDMA_GID", "auto")
@@ -155,7 +159,7 @@ class RdmaPleTable:
         self.row_bytes = int(row_bytes)
         self.torch_dtype = torch_dtype
         self.rows_total = int(rows_total)
-        self.mmap_table = mmap_table
+        self.host, self.port, self.dev_name, self.gid = host, int(port), dev, gid
 
         self.rows_t = torch.empty((_NREGIONS * _SLOT, row_bytes),
                                   dtype=torch.uint8, pin_memory=True)
@@ -168,10 +172,10 @@ class RdmaPleTable:
             raise RuntimeError("ple rdma: row_bytes mismatch with server")
         self.loaded = np.asarray(sorted(self.client.remote["loaded_shards"]))
         self.full = self.loaded.size * self.shard_size >= self.rows_total
-        self.verify = (os.environ.get("VLLM_PLE_RDMA_VERIFY", "0") == "1"
-                       and mmap_table is not None)
-        if not self.full and mmap_table is None:
-            raise RuntimeError("ple rdma: server holds a subset and no mmap fallback")
+        if not self.full:
+            raise RuntimeError(
+                "ple rdma: server holds a subset of the table; the mmap-backed "
+                "subset/VERIFY modes were removed — serve all shards")
 
         self._q: "queue.Queue[_Job]" = queue.Queue()
         self._jobs: list[_Job | None] = [None, None]
@@ -181,10 +185,9 @@ class RdmaPleTable:
         if os.environ.get("VLLM_PLE_RDMA_PREFETCH", "1") == "1":
             _patch_runner()
         logger.info(
-            "PLE rdma: %s dev=%s gid=%d, %d/%d shards served%s, prefetch=%s",
+            "PLE rdma: %s dev=%s gid=%d, %d/%d shards served, prefetch=%s",
             endpoint, dev, gid, self.loaded.size,
             -(-self.rows_total // self.shard_size),
-            ", VERIFY mode" if self.verify else "",
             os.environ.get("VLLM_PLE_RDMA_PREFETCH", "1"),
         )
 
@@ -220,7 +223,7 @@ class RdmaPleTable:
                 if ids.min() < 0 or ids.max() >= self.rows_total:
                     logger.error("PLE rdma: prefetch ids out of range, dropping")
                 else:
-                    self.client.read_rows_at(ids, job.base)
+                    self._robust_read(ids, job.base)
                     job.ok = True
             except Exception:
                 logger.exception("PLE rdma: prefetch worker error")
@@ -241,7 +244,11 @@ class RdmaPleTable:
                     S.get("pf_hook", 0), S.get("pf_call", 0),
                 )
             return None
-        if not job.done.wait(5.0) or not job.ok:
+        while not job.done.wait(5.0):
+            logger.error(
+                "PLE rdma: prefetched READ still pending after 5s — stalling "
+                "the step until it lands (no fallback)")
+        if not job.ok:  # only for out-of-range ids, i.e. an upstream bug
             _bump("rdma_pf_miss")
             return None
         _bump("rdma_pf_hit")
@@ -270,32 +277,38 @@ class RdmaPleTable:
             return np.empty((0, self.row_bytes), dtype=np.uint8)
         if ids.min() < 0 or ids.max() >= self.rows_total:
             raise IndexError(f"PLE rdma: row id out of range [{ids.min()}, {ids.max()}]")
-        served = self.full
-        if not served:
-            mask = np.isin(ids // self.shard_size, self.loaded)
-            served = bool(mask.all())
-        if not served:
-            out = self.mmap_table._gather(ids)
-            if mask.any():
-                rdma_rows = self._read(ids[mask])
-                if self.verify and not np.array_equal(rdma_rows, out[mask]):
-                    logger.error("PLE rdma VERIFY MISMATCH (mixed batch)")
-            return out
-        out = self._read(ids)
-        if self.verify:
-            ref = self.mmap_table._gather(ids)
-            if not np.array_equal(out, ref):
-                bad = int((out != ref).any(axis=1).sum())
-                logger.error("PLE rdma VERIFY MISMATCH: %d/%d rows", bad, ids.size)
-                return ref
-        return out
+        return self._read(ids)
+
+    def _robust_read(self, ids: np.ndarray, dst_row: int) -> None:
+        """READ with retry-until-success: a hiccup stalls the engine (loud
+        ERROR per attempt) instead of degrading to any other row source.
+        Each reconnect re-registers the pinned MR and leaks the old QP/MR —
+        acceptable for rare server bounces."""
+        attempt = 0
+        while True:
+            try:
+                self.client.read_rows_at(ids, dst_row)
+                if attempt:
+                    logger.warning("PLE rdma: READ recovered after %d retries", attempt)
+                return
+            except Exception as e:
+                attempt += 1
+                logger.error(
+                    "PLE rdma: READ failed (%s) — retry %d in 2s, stalling (no fallback)",
+                    e, attempt)
+                time.sleep(2.0)
+                try:
+                    self.client = Client(self.host, self.port, self.dev_name,
+                                         self.gid, self.rows_np, self.row_bytes)
+                except Exception as e2:
+                    logger.error("PLE rdma: reconnect failed (%s)", e2)
 
     def _read(self, ids: np.ndarray) -> np.ndarray:
         base = 2 * _SLOT  # dedicated sync region, untouched by the worker
         out = np.empty((ids.size, self.row_bytes), dtype=np.uint8)
         for a in range(0, ids.size, _SLOT):
             b = min(a + _SLOT, ids.size)
-            self.client.read_rows_at(ids[a:b], base)
+            self._robust_read(ids[a:b], base)
             out[a:b] = self.rows_np[base:base + (b - a)]
         return out
 

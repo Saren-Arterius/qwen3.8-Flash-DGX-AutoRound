@@ -183,8 +183,9 @@ independent and gated by an env var where it changes behavior.
 
 > On this branch the mmap gather is the *generic* path. Production here
 > serves the rows over one-sided RDMA instead (`src/vllm_ple_rdma.py`,
-> `TABLE_DIR=""` + `PLE_RDMA` — see "PLE table over RDMA" below); the
-> mmap dir remains the fallback and backs `PLE_RDMA_VERIFY=1`.
+> `TABLE_DIR=""` + `PLE_RDMA` — see "PLE table over RDMA" below). RDMA
+> mode is exclusive: no mmap table is constructed, and failed READs
+> retry/stall until they succeed (the VERIFY/subset modes were removed).
 
 - **Any table dtype**: bf16/f16 tables and fp8 (with `weight_scale`) are all
   accepted; row size is derived from the safetensors headers. The fp8 table
@@ -445,13 +446,13 @@ WantedBy=multi-user.target
 | `PLE_RDMA_DEV` | `roceP2p1s0f0` | Spark-side ibverbs device |
 | `PLE_RDMA_GID` | `auto` | auto-detects the RoCE v2 GID index |
 | `PLE_RDMA_PREFETCH` | `1` | batch-assembly prefetch; measured neutral here |
-| `PLE_RDMA_VERIFY` | `0` | `1` = cross-check every gather against a local mmap table (`TABLE_DIR` set too); soak passed with zero mismatches before the cutover |
 
 **Sanity first**: `ple_test_client.py <server> <table-dir-over-nfs>` reads
 random rows via RDMA and byte-compares them against the safetensors source.
 
 Fine print: both ends must serve the *same table build* (wire order is sorted
 shard filenames); the server has **no auth and no encryption** — trusted LAN
-only; there is no reconnect logic — if the server bounces, restart the vLLM
-container; the table is gone from RAM on every NAS reboot (the daemon reloads
+only; a failed READ is retried forever (reconnecting every 2 s) — the
+engine stalls loudly instead of degrading, and recovers on its own when
+the server returns; the table is gone from RAM on every NAS reboot (the daemon reloads
 it in under a minute).

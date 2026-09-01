@@ -664,10 +664,12 @@ def apply(cls: type) -> None:
         # checkpoint (e.g. an FP8 copy of the table on local NVMe).
         model_path = os.environ.get("VLLM_PLE_MMAP_DIR") or self._ple_mmap_model_path
         have_dir = bool(model_path) and os.path.isdir(model_path)
-        if rdma_ep and not os.environ.get("VLLM_PLE_MMAP_DIR"):
-            # RDMA mode: never fall back to scanning the checkpoint dir (its
-            # ngram entries are stripped) — mmap participates only when a
-            # table dir is given explicitly.
+        if rdma_ep:
+            # RDMA mode is exclusive: no MmapPleTable is ever constructed and
+            # no table file is opened/mmapped — rows can only come from the
+            # server (failed READs retry+stall there, never fall back here).
+            if os.environ.get("VLLM_PLE_MMAP_DIR"):
+                logger.warning("PLE rdma: ignoring VLLM_PLE_MMAP_DIR (RDMA is exclusive)")
             have_dir = False
         if not have_dir and not rdma_ep:
             raise RuntimeError(
@@ -711,14 +713,12 @@ def apply(cls: type) -> None:
                 chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
             )
         if rdma_ep:
-            # RDMA-only mode (no local table dir): geometry is fixed fp8 rows
-            # of head_dim bytes; the global scale comes from the server hello.
-            row_bytes = mmap_table.row_bytes if mmap_table else int(self.head_dim)
-            torch_dtype = mmap_table.torch_dtype if mmap_table else torch.float8_e4m3fn
+            # RDMA-only: geometry is fixed fp8 rows of head_dim bytes; the
+            # global scale comes from the server hello.
             from vllm_ple_rdma import RdmaPleTable
 
-            table = RdmaPleTable(rdma_ep, shard_size, row_bytes, torch_dtype,
-                                 vocab, mmap_table)
+            table = RdmaPleTable(rdma_ep, shard_size, int(self.head_dim),
+                                 torch.float8_e4m3fn, vocab)
             if not hasattr(self, "_offload_weight_scale"):
                 scale = table.client.remote.get("weight_scale")
                 if scale is None:
