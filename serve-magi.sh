@@ -36,6 +36,8 @@ export PREFIX_CACHE=1
 # export HIT_DEBUG=1
 # on-demand step profiler (touch /tmp/profile_trigger in the container)
 export STEP_PROFILE=0
+# live prefill tok/s on /metrics (vllm:scheduled_ctx_tokens_total; bench/ppwatch.sh)
+export ITER_DETAILS=1
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 
 exec scripts/serve-intel-ar.sh

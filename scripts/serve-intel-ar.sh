@@ -36,6 +36,9 @@ DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
 EXTRA="${EXTRA:-}"
+# ITER_DETAILS=1: per-step prefill metrics (vllm:scheduled_ctx_tokens_total; live
+# prefill tok/s via bench/ppwatch.sh). Needs the image's prefill-metrics patch.
+[ "${ITER_DETAILS:-0}" = 1 ] && EXTRA="--enable-logging-iteration-details $EXTRA"
 # Chunked-prefill budget per step. With MTP the engine warns below 8192 scheduled
 # tokens; the mamba-aligned splitter then clips chunks to 1600-token multiples.
 MAX_BATCHED="${MAX_BATCHED:-8192}"

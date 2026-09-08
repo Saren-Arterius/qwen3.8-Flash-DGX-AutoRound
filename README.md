@@ -149,6 +149,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `LOAD_FORMAT` | `fastsafetensors` | Noticeably faster cold boots |
 | `TOOL_PARSER` | `qwen3_xml` | Tool-call parser (bare script: `qwen3_coder`) |
 | `SERVED_NAME` | `qwen` | Model id on the API (bare script: `qwen3.8-flash-next`) |
+| `ITER_DETAILS` | `0` | `1` = per-step prefill metrics: `vllm:scheduled_ctx_tokens_total` updates every engine step (stock `prompt_tokens_total` only moves when a prefill finishes). Live view: `bench/ppwatch.sh` |
 | `EXTRA` | | Extra vLLM flags, passed verbatim |
 
 ## Limitations & notes
@@ -379,6 +380,8 @@ src/test_ple_mmap_cpu.py      CPU unit test for the gather (no GPU needed)
 src/test_never_evict_pin.py   CPU unit test for the pin (no GPU needed)
 scripts/serve-intel-ar.sh     the docker run behind serve.sh
 scripts/smoke-test.sh         health + coherence + prefill/decode numbers
+src/patch_prefill_metrics.py  per-step prefill counters for Prometheus (ITER_DETAILS=1)
+bench/ppwatch.sh              live prefill tok/s from those counters
 bench/decode_bench.py         batch-1 decode / TTFT / spec-acceptance bench
 bench/RESULTS.md              step-time profile + knob experiments
 tools/                        CPU-only checkpoint preparation
