@@ -36,6 +36,13 @@ DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
 EXTRA="${EXTRA:-}"
+# Chunked-prefill budget per step. With MTP the engine warns below 8192 scheduled
+# tokens; the mamba-aligned splitter then clips chunks to 1600-token multiples.
+MAX_BATCHED="${MAX_BATCHED:-8192}"
+# LONG_PREFILL_THRESHOLD=N: prompts longer than N are chunked at most N tokens per
+# step, so shorter requests can interleave (--long-prefill-token-threshold; this
+# vLLM has no --max-num-partial-prefills). Unset = no cap.
+[ -n "${LONG_PREFILL_THRESHOLD:-}" ] && EXTRA="--long-prefill-token-threshold $LONG_PREFILL_THRESHOLD $EXTRA"
 # KV_BYTES: size the KV cache explicitly (e.g. 20g) instead of by
 # gpu-memory-utilization fraction — deterministic footprint on unified-memory
 # boxes where "free memory" profiling is unreliable. Pair with a tiny GPU_MEM.
@@ -118,7 +125,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   /model --served-model-name "${SERVED_NAME:-qwen3.8-flash-next}" \
     --host 0.0.0.0 --port 8000 --load-format "${LOAD_FORMAT:-fastsafetensors}" \
     --max-model-len "$CTX" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GPU_MEM" \
-    $PC_ARG --enable-chunked-prefill --max-num-batched-tokens 2048 \
+    $PC_ARG --enable-chunked-prefill --max-num-batched-tokens "$MAX_BATCHED" \
     $CC \
     $AT_ARG \
     --kv-cache-dtype auto \
@@ -126,5 +133,5 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK)"
+echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, batched=$MAX_BATCHED, long_prefill=${LONG_PREFILL_THRESHOLD:-off}, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK)"
 echo ">> follow with: docker logs -f $NAME"

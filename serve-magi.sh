@@ -26,6 +26,10 @@ export SERVED_NAME=qwen
 export GPU_MEM=0.01
 export KV_BYTES=20g
 export MTP=3
+# 8192-token prefill budget: chunks snap to 8000 (5 mamba blocks) with 192 spare
+# for concurrent decodes (4 slots each at MTP=3). No LONG_PREFILL_THRESHOLD —
+# it costs single-stream prefill (extra chunk = extra drafter pass).
+export MAX_BATCHED=8192
 export PREFIX_CACHE=1
 # prefix-cache diagnosis: per-group hit breakdown, mamba publication,
 # eviction and chunk-stop logs (one-liners per request/step)
