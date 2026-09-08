@@ -221,6 +221,8 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `KV_BYTES` | `20g` | Explicit KV pool size, passed as `--kv-cache-memory-bytes` (bare script: unset) |
 | `MTP` | `3` | Speculative tokens from the MTP head (`0` = off; bare script: `2`) |
 | `PREFIX_CACHE` | `1` | Prefix caching — fixed and recommended on this fork (bare script: `0`) |
+| `DET_TOPK` | `1` | Deterministic QSA top-k **kernel** (patch 9; @jschmied, vllm#55122): identical output at T=0 at full prefill speed. `0` = stock kernel (non-deterministic, may drop attention candidates) |
+| `EXACT_TOPK` | `0` | `1` = exact `torch.topk` fallback (patch 9; deterministic, −20–40% on long prefill). Wins over `DET_TOPK` when set |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
 | `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1) |
@@ -399,6 +401,29 @@ boundary-state publication (which slots were real/null/hashed), cached-block
 evictions, and prefill chunk-stop decisions. This is what found the bug in
 patch 5; costs nothing when off.
 
+### 9. Deterministic QSA top-k (`src/patch_qsa_exact_topk.py` + Dockerfile patch 10)
+
+Taken from upstream [blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)
+(`8347e7c`, `4b723de`, `0022e36`). The sparse attention (QSA) picks its top-k key
+blocks with vLLM's `persistent_topk` kernel, which is non-deterministic on GB10 and
+can drop real candidates ([vllm#51782](https://github.com/vllm-project/vllm/issues/51782),
+diagnosed by [@k3dani](https://github.com/k3dani) in
+[blazux#3](https://github.com/blazux/qwen3.8-Flash-DGX/issues/3)). Two fixes, both opt-in
+env vars, `DET_TOPK=1` the default:
+
+- **`DET_TOPK=1` — deterministic kernel** by [@jschmied](https://github.com/jschmied)
+  ([vllm#55122](https://github.com/vllm-project/vllm/pull/55122)): index-ordered output
+  slots and bit-exact tie resolution (signed zero canonicalised), plus a deterministic
+  low-shared-memory fallback. The sources are fetched at a pinned commit (sha256-checked)
+  and compiled with the image's nvcc at build time as a standalone `_C_det.so` — no vLLM
+  rebuild; `qsadet_patch.py` (also @jschmied's) wires the QSA block selection to it.
+  Upstream measured the whole prefill penalty of the exact path gone (GX10, 32k:
+  1,794 → 2,996 tok/s) with decode unchanged.
+- **`EXACT_TOPK=1` — exact `torch.topk`** over the visible columns (blazux's first fix):
+  also deterministic, −20–40% on long prefill; kept as the fallback and wins over
+  `DET_TOPK` when set. Self-check (no GPU): `docker run --rm -v "$PWD/src:/t" -w /t
+  --entrypoint python3 qwen38-flash-dgx test_qsa_exact_topk_cpu.py`.
+
 ## Speculative decoding and TTFT
 
 MTP raises decode substantially but puts a floor (~0.8 s) under
@@ -422,6 +447,9 @@ src/vllm_fp8_hybrid.py        int4+fp8 hybrid dispatch on the GPTQ config
 src/patch_never_evict.py      never-evict system-prompt KV pinning
 src/patch_mamba_align_split.py  prefix-cache chunk-alignment fix
 src/patch_hit_debug.py        prefix-cache tracing (VLLM_HIT_DEBUG)
+src/patch_qsa_exact_topk.py   exact, deterministic QSA top-k (VLLM_QSA_EXACT_TOPK=1; from blazux)
+(Dockerfile patch 10)         @jschmied's deterministic persistent_topk kernel, built at docker build
+src/test_qsa_exact_topk_cpu.py  CPU unit test for the exact top-k (no GPU needed)
 src/mamba_utils_guarded.py    hardened align-mode state copy (vllm#50729 + guard)
 src/test_ple_mmap_cpu.py      CPU unit test for the gather (no GPU needed)
 src/test_never_evict_pin.py   CPU unit test for the pin (no GPU needed)
@@ -451,6 +479,11 @@ docs/OPTIMIZATIONS.md         this fork's patches in depth
   and re-ported here.
 - Serving engine and base image: **vLLM** (`vllm/vllm-openai:qwen38-flash-next`,
   the `release/qwen38next` recipe / PR #53896).
+- Deterministic QSA top-k: the exact `torch.topk` fix and the kernel wiring/pins from
+  upstream **[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)**;
+  the deterministic `persistent_topk` kernel itself by **[@jschmied](https://github.com/jschmied)**
+  ([vllm#55122](https://github.com/vllm-project/vllm/pull/55122)); the bug diagnosed by
+  **[@k3dani](https://github.com/k3dani)** ([blazux#3](https://github.com/blazux/qwen3.8-Flash-DGX/issues/3)).
 - Independent reproduction of the upstream recipe, the native-offload fixes and
   the concurrency measurements: **[@jschmied](https://github.com/jschmied)**
   ([blazux#1](https://github.com/blazux/qwen3.8-Flash-DGX/issues/1),

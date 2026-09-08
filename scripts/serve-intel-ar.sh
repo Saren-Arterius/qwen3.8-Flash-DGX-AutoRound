@@ -25,6 +25,13 @@ GPU_MEM="${GPU_MEM:-0.85}"
 MTP="${MTP:-2}"
 PREWARM="${PREWARM:-1}"
 TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
+# QSA top-k: DET_TOPK=1 (default) = @jschmied's deterministic persistent_topk kernel
+# (Dockerfile patch 10, vllm#55122) — identical output at temperature 0 at full
+# prefill speed. EXACT_TOPK=1 = exact torch.topk fallback (patch 9; deterministic,
+# -20-40% long prefill), wins over DET_TOPK. Both 0 = stock kernel.
+DET_TOPK="${DET_TOPK:-1}"
+EXACT_TOPK="${EXACT_TOPK:-0}"
+DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
 EXTRA="${EXTRA:-}"
 # KV_BYTES: size the KV cache explicitly (e.g. 13.2g) instead of by
 # gpu-memory-utilization fraction — deterministic footprint on unified-memory
@@ -71,6 +78,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_PLE_MMAP_DIR=/ple-table \
+  -e VLLM_QSA_EXACT_TOPK="$EXACT_TOPK" "${DETENV[@]}" \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
   -e VLLM_USE_DEEP_GEMM=0 \
@@ -88,5 +96,5 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM)"
+echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK)"
 echo ">> follow with: docker logs -f $NAME"
