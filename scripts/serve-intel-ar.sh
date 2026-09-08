@@ -35,6 +35,9 @@ DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
 EXTRA="${EXTRA:-}"
+# ITER_DETAILS=1: per-step prefill metrics (vllm:scheduled_ctx_tokens_total; live
+# prefill tok/s via bench/ppwatch.sh). Needs the image's prefill-metrics patch.
+[ "${ITER_DETAILS:-0}" = 1 ] && EXTRA="--enable-logging-iteration-details $EXTRA"
 # KV_BYTES: size the KV cache explicitly (e.g. 13.2g) instead of by
 # gpu-memory-utilization fraction — deterministic footprint on unified-memory
 # boxes where "free memory" profiling is unreliable. Pair with a tiny GPU_MEM.

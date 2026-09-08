@@ -17,6 +17,7 @@
 #   9. Exact, deterministic QSA top-k                  (VLLM_QSA_EXACT_TOPK=1)  — from upstream blazux
 #  10. Deterministic persistent_topk kernel           (VLLM_QSA_DET_TOPK=1)    — @jschmied; replaces 9 at no prefill cost
 #  11. On-demand step profiler                        (VLLM_STEP_PROFILE=1)
+#  12. Per-step prefill metrics                      (--enable-logging-iteration-details)
 #
 #   docker build -t qwen38-flash-dgx .
 #
@@ -147,3 +148,11 @@ RUN cd /opt/llm/kernel-det/src && DET_BUILD_DIR=/opt/llm/kernel-det/build DET_AR
 # torch.profiler around engine steps; this vLLM predates VLLM_TORCH_PROFILER_DIR.
 COPY src/patch_step_profile.py /tmp/patch_step_profile.py
 RUN python3 /tmp/patch_step_profile.py && rm /tmp/patch_step_profile.py
+
+# --- 12. Per-step prefill metrics (--enable-logging-iteration-details) --------------------
+# vllm:prompt_tokens_total is credited only when a prefill FINISHES; this adds
+# vllm:scheduled_ctx_tokens_total (+ scheduled_iterations_total), fed every engine
+# step from the iteration details, and mutes the stock one-line-per-step logger.
+# Inert without the flag (ITER_DETAILS=1 in scripts/serve-intel-ar.sh); bench/ppwatch.sh.
+COPY src/patch_prefill_metrics.py /tmp/patch_prefill_metrics.py
+RUN python3 /tmp/patch_prefill_metrics.py && rm /tmp/patch_prefill_metrics.py
