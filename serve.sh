@@ -16,6 +16,10 @@ export TOOL_PARSER=qwen3_xml
 export SEQS=8
 export MTP=3
 export PREFIX_CACHE=1
+# Past the native 262144 context: YaRN (factor 4, Qwen's recipe); 500k was
+# upstream's validated ceiling. Needs KV headroom — see README.
+# export YARN=1
+# export CTX=500000
 
 # Deterministic memory sizing for unified-memory boxes (GB10 / DGX Spark):
 # near-zero utilization fraction plus an explicit KV pool, so the driver
