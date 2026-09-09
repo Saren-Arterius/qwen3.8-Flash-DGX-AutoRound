@@ -85,5 +85,5 @@ EOF
 rm -f "$CKPT"/*.bf16.bak
 
 # 8. int4 MTP draft experts -> hardlinked variant (the default MODEL_DIR)
-python3 "$HERE/tools/quantize_mtp_experts_int4.py" "$CKPT" "${CKPT}-MTP_int4RTN"
+tools/quantize_mtp_experts_int4.py "$CKPT" "${CKPT}-MTP_int4RTN"
 echo ">> done. MODEL_DIR=${CKPT}-MTP_int4RTN (bf16-draft option: $CKPT) TABLE_DIR=$TABLE"
