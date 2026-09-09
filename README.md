@@ -36,7 +36,10 @@ patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same bo
 
 Measured on this stack with the default `serve.sh` config (DGX Spark, default GPU
 clocks; int4 MTP draft experts, `DRAFT_VOCAB=1`, MTP=3, prefix caching on, `SEQS=16`,
-8192-token prefill chunks). Single-stream decode by workload, **thinking enabled** —
+8192-token prefill chunks). One caveat: on this box the PLE table is served from
+another machine's RAM over RDMA (the `magi` branch), the fastest row source there is —
+with the table on a regular local NVMe, as in the Quickstart, expect decode about
+2–3% slower than the numbers below. Single-stream decode by workload, **thinking enabled** —
 reproduce with
 [bench_qwen35.sh](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4/blob/master/bench_qwen35.sh)
 (from albond's 122B recipe) pointed at your endpoint, on a freshly started container:
