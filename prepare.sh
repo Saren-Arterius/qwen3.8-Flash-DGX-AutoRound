@@ -5,7 +5,8 @@
 #
 # You can skip all of this: the finished outputs of exactly this script are
 # published at
-#   https://huggingface.co/Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid
+#   https://huggingface.co/Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN  (default)
+#   https://huggingface.co/Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid              (bf16 MTP draft)
 #   https://huggingface.co/Saren/Qwen3.8-Flash-Next-ple-table-fp8
 # Run this only if you'd rather build (or audit) the artifacts yourself.
 #
@@ -30,9 +31,15 @@
 #      config.json.autoround.
 #   7. Delete the .bf16.bak originals (rollback = re-download from Intel and
 #      re-run; steps 2+3 are deterministic, verified bit-exact).
+#   8. quantize_mtp_experts_int4.py — the MTP draft layer's 512 routed experts
+#      (bf16, ~4.7 GiB, excluded by Intel) -> int4 g128 RTN in the same GPTQ
+#      layout, written as a hardlinked variant <checkpoint-dir>-MTP_int4RTN
+#      (no extra space) with the layers.48 exclusion dropped. The default
+#      MODEL_DIR; the bf16-draft dir stays usable as an option.
 #
 # Usage: prepare.sh <checkpoint-dir> <ple-table-dir>
-# Then point serve.sh's MODEL_DIR/TABLE_DIR at the two dirs.
+# Then point serve.sh's MODEL_DIR at <checkpoint-dir>-MTP_int4RTN and
+# TABLE_DIR at the table dir.
 set -euo pipefail
 CKPT="${1:?usage: prepare.sh <checkpoint-dir> <ple-table-dir>}"
 TABLE="${2:?usage: prepare.sh <checkpoint-dir> <ple-table-dir>}"
@@ -76,4 +83,7 @@ print(">> quantization_config rewritten (original: config.json.autoround)")
 EOF
 
 rm -f "$CKPT"/*.bf16.bak
-echo ">> done. MODEL_DIR=$CKPT TABLE_DIR=$TABLE"
+
+# 8. int4 MTP draft experts -> hardlinked variant (the default MODEL_DIR)
+python3 "$HERE/tools/quantize_mtp_experts_int4.py" "$CKPT" "${CKPT}-MTP_int4RTN"
+echo ">> done. MODEL_DIR=${CKPT}-MTP_int4RTN (bf16-draft option: $CKPT) TABLE_DIR=$TABLE"

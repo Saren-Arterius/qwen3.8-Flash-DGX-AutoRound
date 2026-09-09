@@ -1,8 +1,8 @@
 # Qwen3.8-Flash-Next on a single DGX Spark (GB10) — int4 + int8 + fp8 hybrid
 
 Run **Qwen3.8-Flash-Next** — a ~176B-parameter model (125B main + 51B n-gram, 6B
-active) — on **one NVIDIA DGX Spark / ASUS GX10** with **vLLM**: **~49 tok/s
-single-stream decode with MTP=3** (~2,000 tok/s prefill), working **prefix
+active) — on **one NVIDIA DGX Spark / ASUS GX10** with **vLLM**: **~50–60 tok/s
+single-stream decode with MTP=3** (~2,100 tok/s prefill), working **prefix
 caching**, and a **never-evict pin** that keeps your system prompt's KV resident
 through arbitrary traffic.
 
@@ -26,31 +26,34 @@ patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same bo
 
 | | llama.cpp IQ4_XS | upstream (vLLM NVFP4) | **this fork (int4/int8/fp8)** |
 |---|---|---|---|
-| Prefill | ~540 tok/s | ~2,000–2,600 tok/s | **~2,000 tok/s** |
-| Decode, single stream | ~22 tok/s (no MTP) | 25–28 tok/s (MTP=2) | **~49 tok/s (MTP=3)** |
+| Prefill | ~540 tok/s | ~2,000–2,600 tok/s | **~2,100–2,200 tok/s** |
+| Decode, single stream | ~22 tok/s (no MTP) | 25–28 tok/s (MTP=2) | **~50–60 tok/s (MTP=3)** |
 | Prefix caching | — | off (GDN kernel bug) | **on** (+ never-evict pin) |
 | Context | 262k | 262k native / 500k YaRN | 262k native / 500k YaRN |
-| Weights resident | ~94 GiB (GGUF) | ~76 GiB | **~71 GiB** |
+| Weights resident | ~94 GiB (GGUF) | ~76 GiB | **~68 GiB** |
 
 ## Throughput and concurrency
 
-Measured on this stack (DGX Spark, MTP=3 speculative decoding, prefix caching
-on, `SEQS=8`). Single-stream decode by workload — reproduce with
+Measured on this stack with the default `serve.sh` config (DGX Spark, default GPU
+clocks; int4 MTP draft experts, `DRAFT_VOCAB=1`, MTP=3, prefix caching on, `SEQS=16`,
+8192-token prefill chunks). Single-stream decode by workload, **thinking enabled** —
+reproduce with
 [bench_qwen35.sh](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4/blob/master/bench_qwen35.sh)
-(from albond's 122B recipe) pointed at your endpoint; two runs, best of:
+(from albond's 122B recipe) pointed at your endpoint, on a freshly started container:
 
 | Task | Prompt Tokens | Gen Tokens | Time (s) | Speed (tok/s) |
 | --- | --- | --- | --- | --- |
-| **[Q&A]** | 65 | 67.2 ± 14.9 | 1.55 ± 0.43 | 44.1 ± 4.1 |
-| **[Code]** | 72 | 403.8 ± 119.0 | 8.82 ± 3.46 | 47.4 ± 5.2 |
-| **[JSON]** | 90 | 835.5 ± 15.7 | 13.94 ± 0.57 | 60.0 ± 1.6 |
-| **[Math]** | 71 | 64.0 ± 0.0 | 1.24 ± 0.04 | 51.7 ± 1.6 |
-| **[LongCode]** | 79 | 2048.0 ± 0.0 | 43.09 ± 4.00 | 47.8 ± 4.3 |
+| **[Q&A]** | 65 | 57.5 ± 5.2 | 1.18 ± 0.17 | 49.1 ± 2.6 |
+| **[Code]** | 72 | 275.8 ± 2.2 | 4.89 ± 0.24 | 56.5 ± 3.1 |
+| **[JSON]** | 90 | 841.8 ± 20.8 | 13.54 ± 0.46 | 62.1 ± 0.7 |
+| **[Math]** | 71 | 64.0 ± 0.0 | 1.15 ± 0.01 | 55.5 ± 0.2 |
+| **[LongCode]** | 79 | 2048.0 ± 0.0 | 42.33 ± 2.53 | 48.5 ± 2.8 |
 
-*Note: Values represent the arithmetic mean across all 6 benchmark runs (3 scripts × 2 runs each). The `±` values indicate the sample standard deviation.*
+*Note: arithmetic mean ± sample standard deviation over 4 runs (2 scripts × 2 runs, 2026-09-09). Draft acceptance with thinking on is ~70% (2.1 of 3); with `enable_thinking: false` it is ~87% and decode runs 5–10% faster than the table.*
 
 
-llama-benchy
+llama-benchy (measured earlier on the bf16-draft config with `DRAFT_VOCAB=0` and locked 2150 MHz clocks; not yet re-run on the current defaults):
+
 | model   |                  test |    t/s (total) |       t/s (req) |       peak t/s |   peak t/s (req) |             ttfr (ms) |          est_ppt (ms) |         e2e_ttft (ms) |
 |:--------|----------------------:|---------------:|----------------:|---------------:|-----------------:|----------------------:|----------------------:|----------------------:|
 | qwen    |           pp2048 (c1) | 978.53 ± 99.36 |  978.53 ± 99.36 |                |                  |      2118.24 ± 201.94 |      2114.45 ± 201.94 |      2118.24 ± 201.94 |
@@ -153,11 +156,11 @@ cd qwen3.8-Flash-DGX-AutoRound
 
 docker build -t qwen38-flash-dgx .   # official image + this fork's patches
 
-# The prepared checkpoint + PLE table (one-time, ~122 GiB):
-hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid
+# The prepared checkpoint + PLE table (one-time, ~116 GiB):
+hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN
 hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 --local-dir /models/ple-table-fp8
-# optional: same checkpoint with int4 MTP draft experts (-3.5 GiB, +2-4% decode; patch 10):
-#   hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN
+# option: the same checkpoint with the MTP draft experts left in bf16 (+3.5 GiB, ~3% slower decode):
+#   hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid
 # (or build them yourself from Intel's release: ./prepare.sh — see below)
 
 # Point serve.sh at your checkpoint + table dirs, then:
@@ -194,8 +197,8 @@ one script runs the whole pipeline (CPU-only — a NAS box is fine):
 ```
 
 Each step is explained in `prepare.sh`'s header comments: int8 lm_head repack,
-fp8 side-layer conversion, n-gram index strip, fp8 table fetch, and the
-`quantization_config` rewrite. On that last one: this vLLM build has no
+fp8 side-layer conversion, n-gram index strip, fp8 table fetch, the
+`quantization_config` rewrite, and the int4 MTP-draft-experts variant. On that last one: this vLLM build has no
 auto-round loader, but its GPTQ config (`AutoGPTQConfig` → Marlin kernels)
 reads the same packed tensors — the GPTQModel-style `dynamic` rules exclude
 the families that are not int4-packed and flip the head to 8-bit. The original
@@ -205,7 +208,7 @@ AutoRound config is kept as `config.json.autoround`.
 
 ```bash
 docker build -t qwen38-flash-dgx .
-MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-AutoRound \
+MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN \
 TABLE_DIR=/models/ple-table-fp8 \
 PREFIX_CACHE=1 PIN_PROMPT="You are HomeBot, the household assistant." \
 scripts/serve-intel-ar.sh
@@ -226,7 +229,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `PREFIX_CACHE` | `1` | Prefix caching — fixed and recommended on this fork (bare script: `0`) |
 | `DET_TOPK` | `1` | Deterministic QSA top-k **kernel** (patch 9; @jschmied, vllm#55122): identical output at T=0 at full prefill speed. `0` = stock kernel (non-deterministic, may drop attention candidates) |
 | `EXACT_TOPK` | `0` | `1` = exact `torch.topk` fallback (patch 9; deterministic, −20–40% on long prefill). Wins over `DET_TOPK` when set |
-| `DRAFT_VOCAB` | `0` | `1` = the MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode, ~1 point of draft acceptance. A path = your own `ids.npy` |
+| `DRAFT_VOCAB` | `1` | The MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode, draft acceptance unchanged (thinking on or off). `0` = full vocabulary; a path = your own `ids.npy` |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
 | `PLE_MADV_RANDOM` | `1` | `MADV_RANDOM` on the table mmap (patch 1): no readahead around 160-byte row faults — upstream (blazux `0c6df7e`) measured 4–8% faster cold prefill and a cleaner page cache, now the default |
@@ -256,7 +259,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | Component | Precision | How |
 |---|---|---|
 | 512-expert MoE, 48 main layers | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
-| MTP draft layer's own 512 experts | **bf16** (~4.7 GiB) — or **int4** with the optional `-MTP_int4RTN` checkpoint | Intel leaves layer 48 unquantized (`-:.*layers\.48\..*`). `tools/quantize_mtp_experts_int4.py` (patch 10) makes it int4 g128 RTN on the Marlin path: −3.5 GiB, +2–4% decode |
+| MTP draft layer's own 512 experts | **int4** GPTQ-Marlin g128 RTN (the default `-MTP_int4RTN` checkpoint) | Intel leaves layer 48 in bf16 (~4.7 GiB, `-:.*layers\.48\..*`); `tools/quantize_mtp_experts_int4.py` (patch 10) makes it int4 on the Marlin path: −3.5 GiB, +2–4% decode, acceptance unchanged. The plain `-hybrid` repo keeps them bf16 |
 | lm_head (shared with MTP draft head) | **int8** GPTQ-Marlin (uint8b128) | `tools/quantize_lm_head_int8.py` + `"lm_head": true` |
 | GDN in/out projections, QSA q/k/v/o, shared expert | **fp8** blockwise e4m3 (128×128) | `tools/fp8_convert.py` + `src/vllm_fp8_hybrid.py` |
 | Embeddings, hyper-connections, norms, MoE gates, fc_hidden | bf16 | excluded via `dynamic` rules |
@@ -432,15 +435,22 @@ env vars, `DET_TOPK=1` the default:
 
 ### 10. MTP drafter options: int4 draft experts + reduced draft vocabulary
 
-Both opt-in, both leave outputs unchanged — the target verifies every drafted
-token, only the draft's cost and acceptance move. Measured on a DGX Spark
-(`bench_qwen35.sh`, T=0, second run):
+Both on by default (the Quickstart checkpoint + `DRAFT_VOCAB=1`); the plain
+`-hybrid` checkpoint and `DRAFT_VOCAB=0` remain options. Both leave outputs
+unchanged — the target verifies every drafted token, only the draft's cost and
+acceptance move. Measured on a DGX Spark (`bench_qwen35.sh` with
+`enable_thinking: false`, T=0, second run):
 
-| | bf16 draft (default) | int4 draft experts | int4 + `DRAFT_VOCAB=1` |
+| | bf16 draft (`-hybrid` repo) | int4 draft experts | int4 + `DRAFT_VOCAB=1` (default) |
 |---|---|---|---|
 | Code / JSON / LongCode tok/s | 57.3 / 61.3 / 57.9 | 59.1 / 62.6 / 60.3 | **62.0 / 66.0 / 62.4** |
 | draft acceptance (of 3) | 88.0% (2.64) | 88.5% (2.65) | 87.3% (2.62) |
 | weights resident | ~71.4 GiB | 67.9 GiB | 67.9 GiB |
+
+With thinking **on** (albond's original script) draft acceptance is ~70% in all three
+configs — only 1.0% of reasoning tokens fall outside the 65k set — and the default
+config is still the fastest (Code 56.5, JSON 62.1, LongCode 48.5 tok/s, see the
+Throughput table).
 
 - **int4 draft experts** — Intel's checkpoint leaves the MTP layer's 512 routed
   experts in bf16 (~4.7 GiB on the unquantized MoE path). `tools/quantize_mtp_experts_int4.py`

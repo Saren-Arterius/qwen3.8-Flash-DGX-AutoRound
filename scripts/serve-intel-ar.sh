@@ -8,7 +8,7 @@
 # preparation") — tools/quantize_lm_head_int8.py, tools/fp8_convert.py,
 # tools/strip_ngram_index.py, plus the quantization_config for config.json.
 #
-#   MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound \
+#   MODEL_DIR=/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN \
 #   TABLE_DIR=/models/ple-table-fp8 scripts/serve-intel-ar.sh
 #
 #   MTP=0 ... scripts/serve-intel-ar.sh     # no speculation (first-boot sanity)
@@ -17,7 +17,7 @@ set -euo pipefail
 
 NAME="${NAME:-qwen38-flash}"
 IMAGE="${IMAGE:-qwen38-flash-dgx}"
-MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound}"
+MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN}"
 TABLE_DIR="${TABLE_DIR:-/models/ple-table-fp8}"
 PORT="${PORT:-18300}"
 CTX="${CTX:-262144}"
@@ -35,8 +35,9 @@ DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
 # DRAFT_VOCAB: 1 = the MTP drafter scores only the 65,536 most frequent tokens (patch 14,
-# from upstream blazux); 0 = full vocabulary; a path = your own ids.npy.
-DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
+# from upstream blazux); 0 = full vocabulary; a path = your own ids.npy. On by default:
+# +3-5% decode, draft acceptance unchanged with thinking on or off (int8 head -> bf16 slice).
+DRAFT_VOCAB="${DRAFT_VOCAB:-1}"
 case "$DRAFT_VOCAB" in
   0) ;;
   1) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB=/opt/llm/draft_vocab_65536.npy) ;;
