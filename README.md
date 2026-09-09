@@ -1,5 +1,13 @@
 # Qwen3.8-Flash-Next on one DGX Spark
 
+### Two checkpoints: `hibrid47`, the default — and `hibrid47-uncensored`, made from it (abliterated, gated). Switch with one line in `recipe.yaml`
+
+[`hibrid47`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid47) (the base model, default,
+every number below) and [`hibrid47-uncensored`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid47-uncensored)
+(OrcaRouter's abliterated body, no refusals, no guardrails — gated, research / private use; on one Spark not yet measured, expect a
+smaller KV pin). To switch: in `recipe.yaml` comment the active `model:` line and uncomment the other, then `./run.sh`.
+Details in [Which checkpoint](#which-checkpoint).
+
 **One box. 262k context. 50 tok/s sustained on code, minute after minute — and the engine never wavers. Three commands.**
 
 **v2 (2026-09-07)** serves [myllmbox/Qwen3.8-Flash-Next-hibrid47](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid47)
@@ -51,6 +59,24 @@ curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/jso
   "messages": [{"role": "user", "content": "hello"}]
 }'
 ```
+
+**Hugging Face token.** Anonymous downloads are rate-limited, and gated models (license-agreement repos, e.g. uncensored variants) refuse anonymous access. `run.sh` looks for `HF_TOKEN`, then `~/.cache/huggingface/token` (`hf auth login`), and asks for one when the repo is gated — after you accepted its agreement on the model page. Nothing is stored by the kit.
+
+## Which checkpoint
+
+Two checkpoints run on this stack; `recipe.yaml` ships with the first active and the second commented out under it.
+Switching is comment one line, uncomment the other, `./run.sh`:
+
+| `model:` | what it is | speed on this kit |
+|---|---|---|
+| `myllmbox/Qwen3.8-Flash-Next-hibrid47` (default) | the base model, calibrated body, the checkpoint every number below was measured on | 14.4 steps/s, 50–51 tok/s at c=1 |
+| `myllmbox/Qwen3.8-Flash-Next-hibrid47-uncensored` | OrcaRouter's abliterated (refusal-removed) body on the same layout — **no guardrails**; research, red-teaming, private use behind your own moderation | measured on two Sparks only (same step rate as hibrid47 there); its body is ~5 GB heavier, so on one Spark expect a smaller KV pin — not yet run here |
+
+The uncensored repo is **gated**: open its Hugging Face page, accept the agreement, then `hf auth login` (or `export
+HF_TOKEN=…`) before `./run.sh` — the kit checks both and tells you what is missing. Running both checkpoints at different
+times? Set `served-model-name` to something distinct (e.g. `Qwen/Qwen3.8-Flash-Next-Uncensored`) so clients and logs can tell
+them apart. Both weigh 99 GB; the first download of the second one is a full download (different body), the 8 table shards are
+shared bytes.
 
 ## Measured performance (this exact kit, single Spark, K=3, `vm.compaction_proactiveness=0`)
 

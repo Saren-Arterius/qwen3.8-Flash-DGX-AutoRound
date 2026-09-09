@@ -8,6 +8,12 @@ server:
   cpuset: "5-9,15-19"                           # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
                                                 # are 2.8GHz A725) — measured +2-3% at every concurrency
   model: myllmbox/Qwen3.8-Flash-Next-hibrid47   # HF repo — downloaded into ./models on first run (~99G)
+  # model: myllmbox/Qwen3.8-Flash-Next-hibrid47-uncensored   # the abliterated body (OrcaRouter) on the same stack, 99G:
+                                                # no refusals, NO guardrails — research / red-teaming / private use behind your
+                                                # own moderation. GATED on Hugging Face: accept its agreement, then hf auth login
+                                                # or export HF_TOKEN (run.sh checks). Its body is ~5 GB heavier than hibrid47's
+                                                # (FP8 attention + bf16 extras vs our calibrated tiers) — measured on two Sparks
+                                                # (17.9 steps/s vs 17.7), NOT yet on one: expect a smaller KV pin to fit.
   port: 8000
   models_dir: ./models
   cache_dir: ./cache                            # compile caches + the table's flag files; deletable, first boot rebuilds
