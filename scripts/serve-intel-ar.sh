@@ -35,6 +35,15 @@ TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
+# DRAFT_VOCAB: 1 = the MTP drafter scores only the 65,536 most frequent tokens (patch 14,
+# from upstream blazux); 0 = full vocabulary; a path = your own ids.npy. Default 0 here
+# until measured on this fork (int8 head -> bf16 slice).
+DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
+case "$DRAFT_VOCAB" in
+  0) ;;
+  1) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB=/opt/llm/draft_vocab_65536.npy) ;;
+  *) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB="$DRAFT_VOCAB") ;;
+esac
 EXTRA="${EXTRA:-}"
 # ITER_DETAILS=1: per-step prefill metrics (vllm:scheduled_ctx_tokens_total; live
 # prefill tok/s via bench/ppwatch.sh). Needs the image's prefill-metrics patch.
@@ -136,5 +145,5 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, batched=$MAX_BATCHED, long_prefill=${LONG_PREFILL_THRESHOLD:-off}, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK)"
+echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, batched=$MAX_BATCHED, long_prefill=${LONG_PREFILL_THRESHOLD:-off}, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK, draft_vocab=$DRAFT_VOCAB)"
 echo ">> follow with: docker logs -f $NAME"

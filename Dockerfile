@@ -17,6 +17,7 @@
 #  10. Deterministic persistent_topk kernel           (VLLM_QSA_DET_TOPK=1)    — @jschmied; replaces 9 at no prefill cost
 #  11. On-demand step profiler                        (VLLM_STEP_PROFILE=1)
 #  13. Per-step prefill metrics                      (--enable-logging-iteration-details)
+#  14. Reduced MTP draft vocabulary                   (VLLM_MTP_DRAFT_VOCAB=<ids.npy>) — from upstream blazux
 #  12. PLE table over RDMA                            (VLLM_PLE_RDMA=host:port) — magi branch
 #
 #   docker build -t qwen38-flash-dgx .
@@ -156,6 +157,18 @@ RUN python3 /tmp/patch_step_profile.py && rm /tmp/patch_step_profile.py
 # Inert without the flag (ITER_DETAILS=1 in scripts/serve-intel-ar.sh); bench/ppwatch.sh.
 COPY src/patch_prefill_metrics.py /tmp/patch_prefill_metrics.py
 RUN python3 /tmp/patch_prefill_metrics.py && rm /tmp/patch_prefill_metrics.py
+
+# --- 14. Reduced MTP draft vocabulary (VLLM_MTP_DRAFT_VOCAB=<ids.npy>) ------------------------
+# From upstream blazux/qwen3.8-Flash-DGX (0c6df7e; idea from MiaAI-Lab, reimplemented). vLLM
+# shares the target's lm_head with the MTP draft, so each draft step scores all 248,320 rows.
+# With the env set the draft scores a private 65,536-row slice (corpus frequency + BPE order +
+# all special tokens, src/draft_vocab_65536.npy; tools/build_draft_vocab.py rebuilds it) and
+# every other id is -inf; the target verifies every token so outputs are unchanged. This
+# fork's head is int8 GPTQ-Marlin, so the slice is dequantized from the checkpoint's GPTQ
+# tensors at first use (VLLM_MTP_DRAFT_VOCAB_CKPT, default /model). Inert unless set.
+COPY src/draft_vocab_65536.npy /opt/llm/draft_vocab_65536.npy
+COPY src/patch_mtp_draft_vocab.py /tmp/patch_mtp_draft_vocab.py
+RUN python3 /tmp/patch_mtp_draft_vocab.py ${MTP_PY} && rm /tmp/patch_mtp_draft_vocab.py
 
 # --- 12. PLE table over RDMA (VLLM_PLE_RDMA=<host:port>) — magi branch --------------------
 # One-sided READs against the table daemon (src/ple_rdma/); RDMA mode is exclusive (no
