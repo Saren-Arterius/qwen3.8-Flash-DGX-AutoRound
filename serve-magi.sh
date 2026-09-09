@@ -26,8 +26,11 @@ export SERVED_NAME=qwen
 # MMU faults: the unified pool was oversubscribed and the "illegal memory
 # access" crashes tracked failed driver allocations.
 export GPU_MEM=0.01
-export KV_BYTES=20g
+export KV_BYTES=24g
 export MTP=3
+# Reduced draft vocabulary OFF here: the 65k id set (English/code-weighted corpus)
+# hurts draft acceptance and hence tg on CJK output (observed 2026-09-09).
+export DRAFT_VOCAB=0
 # 8192-token prefill budget: chunks snap to 8000 (5 mamba blocks) with 192 spare
 # for concurrent decodes (4 slots each at MTP=3). No LONG_PREFILL_THRESHOLD —
 # it costs single-stream prefill (extra chunk = extra drafter pass).
