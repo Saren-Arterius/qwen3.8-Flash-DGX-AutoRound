@@ -31,6 +31,9 @@ export MTP=3
 # Reduced draft vocabulary OFF here: the 65k id set (English/code-weighted corpus)
 # hurts draft acceptance and hence tg on CJK output (observed 2026-09-09).
 export DRAFT_VOCAB=0
+# DRAFT_HEAD=int4 (private int4 RTN head, half the bytes per draft step) measured
+# 2026-09-10: tg unchanged within noise, acceptance 1-8 points lower (tc/yue/en/code).
+# The bandwidth saved is given back in rejected drafts, so the shared int8 head stays.
 # 8192-token prefill budget: chunks snap to 8000 (5 mamba blocks) with 192 spare
 # for concurrent decodes (4 slots each at MTP=3). No LONG_PREFILL_THRESHOLD —
 # it costs single-stream prefill (extra chunk = extra drafter pass).

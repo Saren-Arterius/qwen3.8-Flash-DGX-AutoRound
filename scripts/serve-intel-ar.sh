@@ -39,6 +39,12 @@ DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET
 # from upstream blazux); 0 = full vocabulary; a path = your own ids.npy. On by default:
 # +3-5% decode, draft acceptance unchanged with thinking on or off (int8 head -> bf16 slice).
 DRAFT_VOCAB="${DRAFT_VOCAB:-1}"
+# DRAFT_HEAD: int8 (default) = the drafter shares the target lm_head (int8 GPTQ-Marlin, 616 MiB
+# read per draft step); int4 = a private int4 g128 RTN Marlin copy of the head built at first use
+# (~320 MB, half the bytes per draft step) over the FULL vocabulary, so CJK acceptance is not
+# affected the way DRAFT_VOCAB=1 is. Combines with DRAFT_VOCAB (the slice becomes int4).
+DRAFT_HEAD="${DRAFT_HEAD:-int8}"
+[ "$DRAFT_HEAD" = int4 ] && DETENV+=(-e VLLM_MTP_DRAFT_HEAD=int4)
 case "$DRAFT_VOCAB" in
   0) ;;
   1) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB=/opt/llm/draft_vocab_65536.npy) ;;
@@ -145,5 +151,5 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, batched=$MAX_BATCHED, long_prefill=${LONG_PREFILL_THRESHOLD:-off}, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK, draft_vocab=$DRAFT_VOCAB)"
+echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, batched=$MAX_BATCHED, long_prefill=${LONG_PREFILL_THRESHOLD:-off}, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK, draft_vocab=$DRAFT_VOCAB, draft_head=$DRAFT_HEAD)"
 echo ">> follow with: docker logs -f $NAME"
