@@ -142,7 +142,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `PREFIX_CACHE` | `1` | Prefix caching — fixed and recommended on this fork (bare script: `0`) |
 | `DET_TOPK` | `1` | Deterministic QSA top-k **kernel** (patch 9; @jschmied, vllm#55122): identical output at T=0 at full prefill speed. `0` = stock kernel (non-deterministic, may drop attention candidates) |
 | `EXACT_TOPK` | `0` | `1` = exact `torch.topk` fallback (patch 9; deterministic, −20–40% on long prefill). Wins over `DET_TOPK` when set |
-| `DRAFT_VOCAB` | `0` | `1` = the MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode, ~1 point of draft acceptance. A path = your own `ids.npy` |
+| `DRAFT_VOCAB` | `1` | The MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode, draft acceptance unchanged (thinking on or off). `0` = full vocabulary; a path = your own `ids.npy` |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
 | `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1); upstream defaults it on (4–8% faster cold prefill), moot here under RDMA |
@@ -171,7 +171,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | Component | Precision | How |
 |---|---|---|
 | 512-expert MoE, 48 main layers | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
-| MTP draft layer's own 512 experts | **bf16** (~4.7 GiB) — or **int4** with the optional `-MTP_int4RTN` checkpoint | Intel leaves layer 48 unquantized (`-:.*layers\.48\..*`). `tools/quantize_mtp_experts_int4.py` (patch 10) makes it int4 g128 RTN on the Marlin path: −3.5 GiB, +2–4% decode |
+| MTP draft layer's own 512 experts | **int4** GPTQ-Marlin g128 RTN (the default `-MTP_int4RTN` checkpoint) | Intel leaves layer 48 in bf16 (~4.7 GiB, `-:.*layers\.48\..*`); `tools/quantize_mtp_experts_int4.py` (patch 10) makes it int4 on the Marlin path: −3.5 GiB, +2–4% decode, acceptance unchanged. The plain `-hybrid` repo keeps them bf16 |
 | lm_head (shared with MTP draft head) | **int8** GPTQ-Marlin (uint8b128) | `tools/quantize_lm_head_int8.py` + `"lm_head": true` |
 | GDN in/out projections, QSA q/k/v/o, shared expert | **fp8** blockwise e4m3 (128×128) | `tools/fp8_convert.py` + `src/vllm_fp8_hybrid.py` |
 | Embeddings, hyper-connections, norms, MoE gates, fc_hidden | bf16 | excluded via `dynamic` rules |
@@ -353,15 +353,21 @@ env vars, `DET_TOPK=1` the default:
 
 ### 10. MTP drafter options: int4 draft experts + reduced draft vocabulary
 
-Both opt-in, both leave outputs unchanged — the target verifies every drafted
-token, only the draft's cost and acceptance move. Measured on a DGX Spark
-(`bench_qwen35.sh`, T=0, second run):
+Both on by default (`MODEL_DIR` = the `-MTP_int4RTN` checkpoint + `DRAFT_VOCAB=1`);
+the plain `-hybrid` checkpoint and `DRAFT_VOCAB=0` remain options. Both leave
+outputs unchanged — the target verifies every drafted token, only the draft's
+cost and acceptance move. Measured on a DGX Spark (`bench_qwen35.sh` with
+`enable_thinking: false`, T=0, second run):
 
-| | bf16 draft (default) | int4 draft experts | int4 + `DRAFT_VOCAB=1` |
+| | bf16 draft (`-hybrid` repo) | int4 draft experts | int4 + `DRAFT_VOCAB=1` (default) |
 |---|---|---|---|
 | Code / JSON / LongCode tok/s | 57.3 / 61.3 / 57.9 | 59.1 / 62.6 / 60.3 | **62.0 / 66.0 / 62.4** |
 | draft acceptance (of 3) | 88.0% (2.64) | 88.5% (2.65) | 87.3% (2.62) |
 | weights resident | ~71.4 GiB | 67.9 GiB | 67.9 GiB |
+
+With thinking **on** (albond's original script) draft acceptance is ~70% in all three
+configs — only 1.0% of reasoning tokens fall outside the 65k set — and the default
+config is still the fastest (Code 56.5, JSON 62.1, LongCode 48.5 tok/s).
 
 - **int4 draft experts** — Intel's checkpoint leaves the MTP layer's 512 routed
   experts in bf16 (~4.7 GiB on the unquantized MoE path). `tools/quantize_mtp_experts_int4.py`

@@ -12,8 +12,9 @@ release for the main experts. Output layout per expert projection (w: [out, in] 
                                     the max-magnitude value lands on the -8 slot)
 
 usage: quantize_mtp_experts_int4.py <src_ckpt_dir> <dst_ckpt_dir>
-dst must already hold (hard)links of every untouched shard; this writes
-model_extra_tensors.safetensors, model.safetensors.index.json and config.json there.
+dst is created if missing: every untouched file is hardlinked from src (copied if
+that fails), then model_extra_tensors.safetensors, model.safetensors.index.json and
+config.json are written fresh (never through a hardlink — that would edit src).
 """
 import json, os, re, sys
 import numpy as np
@@ -53,7 +54,28 @@ def dequant(qweight, qzeros, scales):
     return torch.from_numpy(w.reshape(in8 * PACK, out_f).T)
 
 
+REGEN = ("model_extra_tensors.safetensors", "model.safetensors.index.json", "config.json")
+
+
+def link_tree(src, dst):
+    import shutil
+    os.makedirs(dst, exist_ok=True)
+    for name in sorted(os.listdir(src)):
+        s, d = os.path.join(src, name), os.path.join(dst, name)
+        if name in REGEN or not os.path.isfile(s) or os.path.lexists(d):
+            continue
+        try:
+            os.link(s, d)
+        except OSError:
+            shutil.copy2(s, d)
+    for name in REGEN:  # never write through a hardlink of the source
+        d = os.path.join(dst, name)
+        if os.path.lexists(d) and os.stat(d).st_nlink > 1:
+            os.unlink(d)
+
+
 def main(src, dst):
+    link_tree(src, dst)
     extra = os.path.join(src, "model_extra_tensors.safetensors")
     tensors = load_file(extra)
     out, n_q, worst = {}, 0, 0.0
@@ -71,7 +93,8 @@ def main(src, dst):
             print(f"  [{n_q}] {k}: max-rel reconstruction error {err:.4f}", flush=True)
     assert n_q == 1536, n_q
     dst_extra = os.path.join(dst, "model_extra_tensors.safetensors")
-    assert not os.path.lexists(dst_extra), "refusing to overwrite (hardlink of the source?)"
+    if os.path.lexists(dst_extra):
+        os.unlink(dst_extra)
     save_file(out, dst_extra, metadata={"format": "pt"})
     print(f"wrote {dst_extra}: {n_q} expert tensors -> int4 ({3*n_q} tensors), {len(out)-3*n_q} kept bf16; worst spot-check {worst:.4f}")
 

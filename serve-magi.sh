@@ -3,7 +3,9 @@
 # machine-specific lives here — scripts/serve-intel-ar.sh stays generic.
 cd "$(dirname "$0")"
 
-export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound"
+# int4 MTP draft experts variant (tools/quantize_mtp_experts_int4.py, 2026-09-09):
+# -3.5 GiB, +2-4% decode, acceptance unchanged. bf16-draft original: the dir without -mtpint4.
+export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-mtpint4"
 export FP8_HYBRID=1
 # PLE rows come from wtako's ple-rdma-server. RDMA mode is exclusive: no
 # local table, no mmap — failed READs retry/stall instead of falling back.
