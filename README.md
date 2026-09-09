@@ -73,6 +73,8 @@ docker build -t qwen38-flash-dgx .   # official image + this fork's patches
 # The prepared checkpoint + PLE table (one-time, ~122 GiB):
 hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid --local-dir /models/Qwen3.8-Flash-Next-W4A16-RTN-AutoRound
 hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 --local-dir /models/ple-table-fp8
+# optional: same checkpoint with int4 MTP draft experts (-3.5 GiB, +2-4% decode; patch 10):
+#   hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN --local-dir /models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN
 # (or build them yourself from Intel's release: ./prepare.sh — see below)
 
 # Point serve.sh at your checkpoint + table dirs, then:
@@ -140,9 +142,10 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `PREFIX_CACHE` | `1` | Prefix caching — fixed and recommended on this fork (bare script: `0`) |
 | `DET_TOPK` | `1` | Deterministic QSA top-k **kernel** (patch 9; @jschmied, vllm#55122): identical output at T=0 at full prefill speed. `0` = stock kernel (non-deterministic, may drop attention candidates) |
 | `EXACT_TOPK` | `0` | `1` = exact `torch.topk` fallback (patch 9; deterministic, −20–40% on long prefill). Wins over `DET_TOPK` when set |
+| `DRAFT_VOCAB` | `0` | `1` = the MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode, ~1 point of draft acceptance. A path = your own `ids.npy` |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
-| `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1) |
+| `PLE_MADV_RANDOM` | `0` | `MADV_RANDOM` on the table mmap (patch 1); upstream defaults it on (4–8% faster cold prefill), moot here under RDMA |
 | `HIT_DEBUG` | `0` | Prefix-cache tracing (patch 8) |
 | `PREWARM` | `1` | Stream the table once at boot to warm the page cache |
 | `WORKERS` | `32` | Threads for the mmap gather |
@@ -168,7 +171,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | Component | Precision | How |
 |---|---|---|
 | 512-expert MoE, 48 main layers | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
-| MTP draft layer's own 512 experts (+ its shared expert) | **bf16** (~4.7 GiB) | Intel leaves layer 48 unquantized (`-:.*layers\.48\..*`); runs on the unquantized FlashInfer MoE path. Quantizing it is an open option (cf. upstream's `hybrid-mtp` graft) |
+| MTP draft layer's own 512 experts | **bf16** (~4.7 GiB) — or **int4** with the optional `-MTP_int4RTN` checkpoint | Intel leaves layer 48 unquantized (`-:.*layers\.48\..*`). `tools/quantize_mtp_experts_int4.py` (patch 10) makes it int4 g128 RTN on the Marlin path: −3.5 GiB, +2–4% decode |
 | lm_head (shared with MTP draft head) | **int8** GPTQ-Marlin (uint8b128) | `tools/quantize_lm_head_int8.py` + `"lm_head": true` |
 | GDN in/out projections, QSA q/k/v/o, shared expert | **fp8** blockwise e4m3 (128×128) | `tools/fp8_convert.py` + `src/vllm_fp8_hybrid.py` |
 | Embeddings, hyper-connections, norms, MoE gates, fc_hidden | bf16 | excluded via `dynamic` rules |
@@ -348,6 +351,37 @@ env vars, `DET_TOPK=1` the default:
   `DET_TOPK` when set. Self-check (no GPU): `docker run --rm -v "$PWD/src:/t" -w /t
   --entrypoint python3 qwen38-flash-dgx test_qsa_exact_topk_cpu.py`.
 
+### 10. MTP drafter options: int4 draft experts + reduced draft vocabulary
+
+Both opt-in, both leave outputs unchanged — the target verifies every drafted
+token, only the draft's cost and acceptance move. Measured on a DGX Spark
+(`bench_qwen35.sh`, T=0, second run):
+
+| | bf16 draft (default) | int4 draft experts | int4 + `DRAFT_VOCAB=1` |
+|---|---|---|---|
+| Code / JSON / LongCode tok/s | 57.3 / 61.3 / 57.9 | 59.1 / 62.6 / 60.3 | **62.0 / 66.0 / 62.4** |
+| draft acceptance (of 3) | 88.0% (2.64) | 88.5% (2.65) | 87.3% (2.62) |
+| weights resident | ~71.4 GiB | 67.9 GiB | 67.9 GiB |
+
+- **int4 draft experts** — Intel's checkpoint leaves the MTP layer's 512 routed
+  experts in bf16 (~4.7 GiB on the unquantized MoE path). `tools/quantize_mtp_experts_int4.py`
+  writes a variant checkpoint (hardlinks for the untouched shards) with those
+  experts as int4 g128 RTN in Intel's exact GPTQ layout and drops the `layers.48`
+  exclusion, so the draft runs on GPTQ-Marlin like the main layers. Prebuilt:
+  [Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN](https://huggingface.co/Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-MTP_int4RTN)
+  — point `MODEL_DIR` at it. Idea from upstream's `hybrid-mtp` mode
+  ([blazux#11](https://github.com/blazux/qwen3.8-Flash-DGX/pull/11) by @pfy, after
+  thavoc's graft write-up), done here as RTN int4 instead of an NVFP4 graft so no
+  new kernel path is needed.
+- **`DRAFT_VOCAB=1`** (`src/patch_mtp_draft_vocab.py`, from upstream blazux `0c6df7e`,
+  idea from MiaAI-Lab's recipe reimplemented there) — vLLM shares the target's
+  lm_head with the drafter, so every draft pass scores all 248,320 rows. With the
+  flag the draft scores a private 65,536-row slice (`src/draft_vocab_65536.npy`:
+  corpus frequency + BPE order + all special tokens; `tools/build_draft_vocab.py`
+  rebuilds it) and every other id is −inf. This fork's head is int8 GPTQ-Marlin,
+  so the slice is dequantized from the checkpoint's GPTQ tensors at first use
+  (616 → 320 MiB read per draft step).
+
 ## Speculative decoding and TTFT
 
 MTP raises decode substantially but puts a floor (~0.8 s) under
@@ -376,6 +410,10 @@ src/patch_hit_debug.py        prefix-cache tracing (VLLM_HIT_DEBUG)
 src/patch_qsa_exact_topk.py   exact, deterministic QSA top-k (VLLM_QSA_EXACT_TOPK=1; from blazux)
 (Dockerfile patch 10)         @jschmied's deterministic persistent_topk kernel, built at docker build
 src/test_qsa_exact_topk_cpu.py  CPU unit test for the exact top-k (no GPU needed)
+src/patch_mtp_draft_vocab.py  reduced MTP draft vocabulary (VLLM_MTP_DRAFT_VOCAB; from blazux)
+src/draft_vocab_65536.npy     the default 65,536-token draft id set (from blazux)
+tools/build_draft_vocab.py    rebuild the draft id set (from blazux)
+tools/quantize_mtp_experts_int4.py  int4 RTN the MTP draft experts -> -MTP_int4RTN checkpoint
 src/mamba_utils_guarded.py    hardened align-mode state copy (vllm#50729 + guard)
 src/test_ple_mmap_cpu.py      CPU unit test for the gather (no GPU needed)
 src/test_never_evict_pin.py   CPU unit test for the pin (no GPU needed)
@@ -408,6 +446,11 @@ docs/OPTIMIZATIONS.md         this fork's patches in depth
   and re-ported here.
 - Serving engine and base image: **vLLM** (`vllm/vllm-openai:qwen38-flash-next`,
   the `release/qwen38next` recipe / PR #53896).
+- MTP drafter options: the reduced draft vocabulary (patch, id set, build tool) from
+  upstream **[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)**
+  (`0c6df7e`; idea from MiaAI-Lab's recipe, reimplemented there); the quantized draft
+  experts follow upstream's `hybrid-mtp` mode
+  ([blazux#11](https://github.com/blazux/qwen3.8-Flash-DGX/pull/11) by **@pfy**).
 - Deterministic QSA top-k: the exact `torch.topk` fix and the kernel wiring/pins from
   upstream **[blazux/qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)**;
   the deterministic `persistent_topk` kernel itself by **[@jschmied](https://github.com/jschmied)**
