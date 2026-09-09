@@ -36,21 +36,22 @@ patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same bo
 
 ## Throughput
 
-Measured on this stack (DGX Spark, MTP=3 speculative decoding, prefix caching
-on, `SEQS=8`). Single-stream decode by workload — reproduce with
+Measured on this stack with the default config of this branch (DGX Spark, default GPU
+clocks; PLE table over RDMA; int4 MTP draft experts, `DRAFT_VOCAB=1`, MTP=3, prefix
+caching on, `SEQS=16`, 8192-token prefill chunks). Single-stream decode by workload,
+**thinking enabled** — reproduce with
 [bench_qwen35.sh](https://github.com/albond/DGX_Spark_Qwen3.5-122B-A10B-AR-INT4/blob/master/bench_qwen35.sh)
-(from albond's 122B recipe) pointed at your endpoint; two runs, best of:
-
+(from albond's 122B recipe) pointed at your endpoint, on a freshly started container:
 
 | Task | Prompt Tokens | Gen Tokens | Time (s) | Speed (tok/s) |
 | --- | --- | --- | --- | --- |
-| **[Q&A]** | 65 | 55.7 ± 5.0 | 1.16 ± 0.11 | 48.1 ± 3.3 |
-| **[Code]** | 72 | 424.8 ± 95.8 | 8.52 ± 2.38 | 50.5 ± 3.8 |
-| **[JSON]** | 90 | 843.0 ± 23.2 | 13.39 ± 0.68 | 62.9 ± 1.6 |
-| **[Math]** | 71 | 64.0 ± 0.0 | 1.20 ± 0.02 | 53.1 ± 1.0 |
-| **[LongCode]** | 79 | 2048.0 ± 0.0 | 41.40 ± 4.47 | 49.9 ± 5.3 |
+| **[Q&A]** | 65 | 57.5 ± 5.2 | 1.18 ± 0.17 | 49.1 ± 2.6 |
+| **[Code]** | 72 | 275.8 ± 2.2 | 4.89 ± 0.24 | 56.5 ± 3.1 |
+| **[JSON]** | 90 | 841.8 ± 20.8 | 13.54 ± 0.46 | 62.1 ± 0.7 |
+| **[Math]** | 71 | 64.0 ± 0.0 | 1.15 ± 0.01 | 55.5 ± 0.2 |
+| **[LongCode]** | 79 | 2048.0 ± 0.0 | 42.33 ± 2.53 | 48.5 ± 2.8 |
 
-*Note: Results show the arithmetic mean across all 6 benchmark runs with standard deviation given as the bias margin.*
+*Note: arithmetic mean ± sample standard deviation over 4 runs (2 scripts × 2 runs, 2026-09-09). Draft acceptance with thinking on is ~70% (2.1 of 3); with `enable_thinking: false` it is ~87% and decode runs 5–10% faster than the table. The previous table (bf16 draft, `DRAFT_VOCAB=0`, `SEQS=8`, 6 runs) read 48.1 / 50.5 / 62.9 / 53.1 / 49.9 tok/s.*
 
 
 ## Requirements
