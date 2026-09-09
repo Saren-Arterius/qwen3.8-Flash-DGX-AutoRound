@@ -167,7 +167,8 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 
 | Component | Precision | How |
 |---|---|---|
-| 512-expert MoE (48 layers + MTP layer's own 512) | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
+| 512-expert MoE, 48 main layers | **int4** GPTQ-Marlin g128 | Intel checkpoint as-is |
+| MTP draft layer's own 512 experts (+ its shared expert) | **bf16** (~4.7 GiB) | Intel leaves layer 48 unquantized (`-:.*layers\.48\..*`); runs on the unquantized FlashInfer MoE path. Quantizing it is an open option (cf. upstream's `hybrid-mtp` graft) |
 | lm_head (shared with MTP draft head) | **int8** GPTQ-Marlin (uint8b128) | `tools/quantize_lm_head_int8.py` + `"lm_head": true` |
 | GDN in/out projections, QSA q/k/v/o, shared expert | **fp8** blockwise e4m3 (128×128) | `tools/fp8_convert.py` + `src/vllm_fp8_hybrid.py` |
 | Embeddings, hyper-connections, norms, MoE gates, fc_hidden | bf16 | excluded via `dynamic` rules |
