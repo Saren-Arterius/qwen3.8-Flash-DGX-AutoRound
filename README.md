@@ -156,6 +156,7 @@ or edit the paths in `serve.sh` (the example config used above) and run it.
 | `DET_TOPK` | `1` | Deterministic QSA top-k **kernel** (patch 9; @jschmied, vllm#55122): identical output at T=0 at full prefill speed. `0` = stock kernel (non-deterministic, may drop attention candidates) |
 | `EXACT_TOPK` | `0` | `1` = exact `torch.topk` fallback (patch 9; deterministic, −20–40% on long prefill). Wins over `DET_TOPK` when set |
 | `DRAFT_VOCAB` | `1` | The MTP drafter scores only the 65,536 most frequent tokens (patch 10; from upstream blazux): +3–5% decode on English/code, draft acceptance unchanged there (thinking on or off). The shipped id set is English/code-weighted — **CJK-heavy output loses acceptance and decode speed with it**, so set `0` (full vocabulary) or build your own set with `tools/build_draft_vocab.py` over your traffic |
+| `DRAFT_HEAD` | `int8` | `int4` gives the drafter a private int4 g128 RTN GPTQ-Marlin copy of the full-vocabulary head (built at first use, ~313 MiB vs 616 MiB read per draft step). Measured a wash: tg unchanged within noise, draft acceptance 1–8 points lower (see the MTP options section), so the shared int8 head stays the default |
 | `PIN_PROMPT` / `PIN_MAX_FRACTION` | unset / `0.25` | Never-evict pin (patch 6); needs `PREFIX_CACHE=1` |
 | `FP8_HYBRID` | `1` | int4+fp8 hybrid dispatch (patch 4) |
 | `PLE_MADV_RANDOM` | `1` | `MADV_RANDOM` on the table mmap (patch 1): no readahead around 160-byte row faults — upstream (blazux `0c6df7e`) measured 4–8% faster cold prefill and a cleaner page cache, now the default |
@@ -396,6 +397,27 @@ Throughput table).
   rebuilds it) and every other id is −inf. This fork's head is int8 GPTQ-Marlin,
   so the slice is dequantized from the checkpoint's GPTQ tensors at first use
   (616 → 320 MiB read per draft step).
+- **`DRAFT_HEAD=int4`** (same patch) — the other way to halve the head read
+  without touching the vocabulary: a private int4 g128 RTN copy of the full head,
+  quantized with vLLM's own `marlin_quantize` at first use (~23 s) from the
+  checkpoint's int8 GPTQ tensors, run through the same GPTQ-Marlin kernel
+  (616 → 313 MiB per draft step; +313 MB resident). Outputs cannot change (the
+  target verifies every token), only acceptance can, and it does: int4 RTN puts
+  ~11% relative error on the head (int8: ~0.5%). Measured 2026-09-10, thinking
+  off, 600-token answers, second run of each prompt:
+
+  | | int8 shared head (default) | `DRAFT_HEAD=int4` |
+  |---|---|---|
+  | Traditional Chinese prose | 34.6 tok/s, 31% accept | 35.5 tok/s, 30% |
+  | Cantonese prose | 32.8 tok/s, 28% | 32.3 tok/s, 25% |
+  | English prose | 40.4 tok/s, 44% | 39.6 tok/s, 39% |
+  | Python + tests | 62.5 tok/s, 86% | 60.7 tok/s, 78% |
+
+  The bandwidth saved is handed back in rejected drafts, so it stays off. A
+  calibrated int4 (AutoRound/GPTQ on real MTP hidden states) might keep more
+  acceptance; not tried. Context: krisbailey.com's "shortlist MTP" write-up found
+  the same ~4% ceiling for head-shrinking tricks once the head kernel is
+  bandwidth-bound, which Marlin already is here.
 
 ## Speculative decoding and TTFT
 
@@ -423,7 +445,7 @@ src/patch_hit_debug.py        prefix-cache tracing (VLLM_HIT_DEBUG)
 src/patch_qsa_exact_topk.py   exact, deterministic QSA top-k (VLLM_QSA_EXACT_TOPK=1; from blazux)
 (Dockerfile patch 10)         @jschmied's deterministic persistent_topk kernel, built at docker build
 src/test_qsa_exact_topk_cpu.py  CPU unit test for the exact top-k (no GPU needed)
-src/patch_mtp_draft_vocab.py  reduced MTP draft vocabulary (VLLM_MTP_DRAFT_VOCAB; from blazux)
+src/patch_mtp_draft_vocab.py  private MTP draft head: reduced vocabulary (from blazux) / int4 (VLLM_MTP_DRAFT_VOCAB, VLLM_MTP_DRAFT_HEAD)
 src/draft_vocab_65536.npy     the default 65,536-token draft id set (from blazux)
 tools/build_draft_vocab.py    rebuild the draft id set (from blazux)
 tools/quantize_mtp_experts_int4.py  int4 RTN the MTP draft experts -> -MTP_int4RTN checkpoint
