@@ -27,9 +27,10 @@ export PREFIX_CACHE=1
 export GPU_MEM=0.01
 export KV_BYTES=20g
 
-# Set to 1 when TABLE_DIR sits on remote RAM or there is no page-cache
-# headroom: madvise(MADV_RANDOM) the PLE mmap so faults stay single-page.
-export PLE_MADV_RANDOM=0
+# madvise(MADV_RANDOM) the PLE mmap: no readahead around 160-byte row faults.
+# Upstream (blazux 0c6df7e) measured 4-8% faster cold prefill and a cleaner
+# page cache; on by default. 0 = kernel readahead.
+export PLE_MADV_RANDOM=1
 
 # Prefix-cache diagnosis logging (VLLM_HIT_DEBUG=1 in the container):
 # per-group hit breakdown, mamba boundary publication, evictions, chunk stops.

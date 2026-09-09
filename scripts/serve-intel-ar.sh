@@ -34,6 +34,14 @@ TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 DET_TOPK="${DET_TOPK:-1}"
 EXACT_TOPK="${EXACT_TOPK:-0}"
 DETENV=(); [ "$DET_TOPK" = 1 ] && DETENV=(-e VLLM_QSA_DET_TOPK=1 -e VLLM_QSA_DET_LIB=/opt/llm/kernel-det/_C_det.so)
+# DRAFT_VOCAB: 1 = the MTP drafter scores only the 65,536 most frequent tokens (patch 14,
+# from upstream blazux); 0 = full vocabulary; a path = your own ids.npy.
+DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
+case "$DRAFT_VOCAB" in
+  0) ;;
+  1) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB=/opt/llm/draft_vocab_65536.npy) ;;
+  *) DETENV+=(-e VLLM_MTP_DRAFT_VOCAB="$DRAFT_VOCAB") ;;
+esac
 EXTRA="${EXTRA:-}"
 # ITER_DETAILS=1: per-step prefill metrics (vllm:scheduled_ctx_tokens_total; live
 # prefill tok/s via bench/ppwatch.sh). Needs the image's prefill-metrics patch.
@@ -93,7 +101,7 @@ docker run -d --name "$NAME" --restart unless-stopped \
   --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
   -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" -e VLLM_PLE_MMAP_PREFETCH="${PLE_PREFETCH:-0}" \
-  -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
+  -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-1}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_PLE_MMAP_DIR=/ple-table \
@@ -115,5 +123,5 @@ docker run -d --name "$NAME" --restart unless-stopped \
     --enable-auto-tool-choice --tool-call-parser "$TOOL_PARSER" --reasoning-parser qwen3 \
     "${PIN_ARG[@]}" "${SPEC[@]}"
 
-echo ">> $NAME starting on :$PORT (ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK)"
+echo ">> $NAME starting on :$PORT (ctx $CTX, yarn=$YARN, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM, det_topk=$DET_TOPK, exact_topk=$EXACT_TOPK, draft_vocab=$DRAFT_VOCAB)"
 echo ">> follow with: docker logs -f $NAME"
