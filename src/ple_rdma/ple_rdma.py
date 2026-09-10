@@ -12,6 +12,7 @@ import mmap
 import os
 import socket
 import struct
+import threading
 
 import numpy as np
 
@@ -56,6 +57,21 @@ def buf_addr(buf) -> int:
     return ctypes.addressof(ctypes.c_char.from_buffer(buf))
 
 
+def find_gid_index(dev_name):
+    """First IPv4-mapped RoCE v2 GID on port 1 — the index drifts across
+    reboots (interface bring-up order), so never hardcode it."""
+    base = f"/sys/class/infiniband/{dev_name}/ports/1"
+    for i in range(16):
+        try:
+            typ = open(f"{base}/gid_attrs/types/{i}").read().strip()
+            gid = open(f"{base}/gids/{i}").read().strip()
+        except OSError:
+            continue
+        if typ == "RoCE v2" and gid.startswith("0000:0000:0000:0000:0000:ffff:"):
+            return i
+    raise RuntimeError(f"no IPv4 RoCE v2 gid on {dev_name}")
+
+
 def iter_shard_tensors(table_dir):
     """Yield (shard_idx, file_path, abs_data_offset, nbytes) for every PLE shard."""
     for fn in sorted(os.listdir(table_dir)):
@@ -89,6 +105,16 @@ def read_weight_scale(table_dir):
     return None
 
 
+def keepalive(sock, idle=5, interval=5, count=3):
+    """Detect a peer that vanished without a FIN (hard crash, link loss) in
+    ~idle+interval*count seconds; the exchange socket otherwise only ever
+    reads, so nothing would ever surface the dead connection."""
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for opt, val in (("TCP_KEEPIDLE", idle), ("TCP_KEEPINTVL", interval), ("TCP_KEEPCNT", count)):
+        if hasattr(socket, opt):
+            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
+
+
 def _send_json(sock, obj):
     sock.sendall(json.dumps(obj).encode() + b"\n")
 
@@ -104,6 +130,9 @@ def _recv_json(sock):
 
 
 def serve(table_dir, dev_name, gid_index, port, shards=None, region=None):
+    if gid_index is None:
+        gid_index = find_gid_index(dev_name)
+        print(f"auto gid index: {gid_index}", flush=True)
     """Load PLE shards into one region, register, serve QP exchanges forever.
 
     shards: optional iterable of shard indices (subset mode). region: optional
@@ -138,36 +167,49 @@ def serve(table_dir, dev_name, gid_index, port, shards=None, region=None):
     assert mr, "mr reg failed (memlock ulimit?)"
     print(f"MR ready: {length >> 20} MiB, rkey={L.ple_mr_rkey(mr):#x}", flush=True)
 
-    srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("0.0.0.0", port))
-    srv.listen(4)
-    print(f"listening :{port}", flush=True)
-    while True:
-        conn, peer = srv.accept()
-        qp = L.ple_qp_create(dev)
-        gid = ctypes.create_string_buffer(16)
-        qpn = ctypes.c_uint32()
-        L.ple_qp_local(qp, gid, ctypes.byref(qpn))
-        _send_json(conn, {
-            "gid": gid.raw.hex(), "qpn": qpn.value,
-            "rkey": L.ple_mr_rkey(mr), "addr": L.ple_mr_addr(mr),
-            "rows": n_shards * SHARD_ROWS, "row_bytes": ROW_BYTES,
-            "loaded_shards": sorted(t[0] for t in plan),
-            "weight_scale": read_weight_scale(table_dir),
-        })
+    hello = {
+        "rkey": L.ple_mr_rkey(mr), "addr": L.ple_mr_addr(mr),
+        "rows": n_shards * SHARD_ROWS, "row_bytes": ROW_BYTES,
+        "loaded_shards": sorted(t[0] for t in plan),
+        "weight_scale": read_weight_scale(table_dir),
+    }
+
+    def handle(conn, peer):
+        # One thread + one QP per client. The accept loop never blocks on a
+        # client, so a wedged/dead peer can no longer lock every later
+        # client out of the exchange (that was the 2026-09-10 boot failure:
+        # a hard-crashed magi left an ESTAB socket the server sat in forever).
+        qp = None
         try:
+            keepalive(conn)
+            conn.settimeout(30)  # the exchange itself; idle wait below is keepalive-guarded
+            qp = L.ple_qp_create(dev)
+            gid = ctypes.create_string_buffer(16)
+            qpn = ctypes.c_uint32()
+            L.ple_qp_local(qp, gid, ctypes.byref(qpn))
+            _send_json(conn, dict(hello, gid=gid.raw.hex(), qpn=qpn.value))
             peer_info = _recv_json(conn)
             rc = L.ple_qp_connect(qp, bytes.fromhex(peer_info["gid"]), peer_info["qpn"])
             print(f"client {peer} qp={qpn.value} connect rc={rc}", flush=True)
-            while conn.recv(4096):  # idle until client disconnects
+            conn.settimeout(None)
+            while conn.recv(4096):  # idle until the client disconnects (or keepalive gives up)
                 pass
-        except (ConnectionError, OSError) as e:
+        except (ConnectionError, OSError, ValueError, KeyError) as e:
             print(f"client {peer}: {e}", flush=True)
         finally:
             conn.close()
             L.ple_qp_destroy(qp)
             print(f"client {peer} gone", flush=True)
+
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(16)
+    print(f"listening :{port}", flush=True)
+    while True:
+        conn, peer = srv.accept()
+        threading.Thread(target=handle, args=(conn, peer), daemon=True,
+                         name=f"ple-client-{peer[0]}:{peer[1]}").start()
 
 
 class Client:
@@ -181,7 +223,8 @@ class Client:
         assert self.mr, "client mr reg failed"
         self.max_rows = max_rows
 
-        self.sock = socket.create_connection((host, port))
+        self.sock = socket.create_connection((host, port), timeout=30)
+        keepalive(self.sock)
         self.remote = _recv_json(self.sock)
         qp = L.ple_qp_create(self.dev)
         gid = ctypes.create_string_buffer(16)

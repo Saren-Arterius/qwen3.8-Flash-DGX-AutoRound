@@ -19,7 +19,11 @@ VLLM_PLE_RDMA_DEV / _GID, VLLM_PLE_RDMA_PREFETCH=1 (default on).
 No fallback: every READ (prefetch worker and lookup-time alike) retries
 forever, reconnecting every 2 s, and the engine stalls until it succeeds
 — a connection hiccup can never silently change where rows come from.
-The mmap-backed VERIFY/subset modes were removed with it.
+The mmap-backed VERIFY/subset modes were removed with it. The initial
+connection retries the same way (the engine load stalls, loudly, instead of
+dying), the old socket/QP is torn down BEFORE redialing (the server used to
+sit on the stale socket and time the new one out), and both ends run TCP
+keepalive so a peer that vanished without a FIN is noticed in ~20 s.
 """
 import ctypes
 import json
@@ -67,7 +71,16 @@ def _load_lib():
             ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint64,
             ctypes.c_uint32, ctypes.c_void_p, ctypes.c_long, ctypes.c_int,
         ]
+        _lib.ple_qp_destroy.argtypes = [ctypes.c_void_p]
+        _lib.ple_mr_dereg.argtypes = [ctypes.c_void_p]
     return _lib
+
+
+def _keepalive(sock, idle=5, interval=5, count=3):
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for opt, val in (("TCP_KEEPIDLE", idle), ("TCP_KEEPINTVL", interval), ("TCP_KEEPCNT", count)):
+        if hasattr(socket, opt):
+            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
 
 
 def find_gid_index(dev_name):
@@ -96,32 +109,43 @@ def _recv_json(sock):
 
 
 class Client:
-    """RC QP to the wtako daemon; READs land in the caller's pinned buffer."""
+    """One RC QP to the wtako daemon over a shared device/MR; READs land in
+    the caller's pinned buffer. Cheap to rebuild: reconnect = close() + new."""
 
-    def __init__(self, host, port, dev_name, gid_index, rows_np: np.ndarray, row_bytes: int):
+    def __init__(self, host, port, dev, lkey, rows_ptr: int, row_bytes: int):
         L = _load_lib()
         self.L = L
-        self.row_bytes = row_bytes
-        self.dev = L.ple_dev_open(dev_name.encode(), 1, gid_index)
-        if not self.dev:
-            raise RuntimeError(f"ple rdma: cannot open device {dev_name}")
-        self.rows_ptr = rows_np.ctypes.data
-        self.mr = L.ple_mr_reg(self.dev, self.rows_ptr, rows_np.nbytes, 0)
-        if not self.mr:
-            raise RuntimeError("ple rdma: local MR registration failed (memlock ulimit?)")
-        self.lkey = L.ple_mr_lkey(self.mr)
+        self.dev, self.lkey, self.rows_ptr, self.row_bytes = dev, lkey, rows_ptr, row_bytes
+        self.qp = None
+        self._lock = threading.Lock()  # one QP: serialize posters (and close)
+        self.sock = socket.create_connection((host, port), timeout=15)
+        try:
+            _keepalive(self.sock)
+            self.remote = _recv_json(self.sock)
+            qp = L.ple_qp_create(dev)
+            if not qp:
+                raise RuntimeError("ple rdma: QP create failed")
+            self.qp = qp
+            gid = ctypes.create_string_buffer(16)
+            qpn = ctypes.c_uint32()
+            L.ple_qp_local(qp, gid, ctypes.byref(qpn))
+            self.sock.sendall(json.dumps({"gid": gid.raw.hex(), "qpn": qpn.value}).encode() + b"\n")
+            if L.ple_qp_connect(qp, bytes.fromhex(self.remote["gid"]), self.remote["qpn"]) != 0:
+                raise RuntimeError("ple rdma: QP connect failed")
+            self.sock.settimeout(None)
+        except Exception:
+            self.close()
+            raise
 
-        self.sock = socket.create_connection((host, port), timeout=30)
-        self.remote = _recv_json(self.sock)
-        qp = L.ple_qp_create(self.dev)
-        gid = ctypes.create_string_buffer(16)
-        qpn = ctypes.c_uint32()
-        L.ple_qp_local(qp, gid, ctypes.byref(qpn))
-        self.sock.sendall(json.dumps({"gid": gid.raw.hex(), "qpn": qpn.value}).encode() + b"\n")
-        if L.ple_qp_connect(qp, bytes.fromhex(self.remote["gid"]), self.remote["qpn"]) != 0:
-            raise RuntimeError("ple rdma: QP connect failed")
-        self.qp = qp
-        self._lock = threading.Lock()  # one QP: serialize posters
+    def close(self):
+        with self._lock:  # never tear the QP down under a poster
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            if self.qp is not None:
+                self.L.ple_qp_destroy(self.qp)
+                self.qp = None
 
     def read_rows_at(self, ids: np.ndarray, dst_row: int) -> None:
         """READ len(ids) rows into the pinned buffer starting at row dst_row."""
@@ -167,15 +191,18 @@ class RdmaPleTable:
         self.ids_t = torch.empty((2 * _SLOT,), dtype=torch.int64, pin_memory=True)
         self.ids_np = self.ids_t.numpy()
 
-        self.client = Client(host, int(port), dev, gid, self.rows_np, self.row_bytes)
-        if self.client.remote["row_bytes"] != row_bytes:
-            raise RuntimeError("ple rdma: row_bytes mismatch with server")
+        L = _load_lib()
+        self.dev = L.ple_dev_open(dev.encode(), 1, gid)
+        if not self.dev:
+            raise RuntimeError(f"ple rdma: cannot open device {dev}")
+        self.mr = L.ple_mr_reg(self.dev, self.rows_np.ctypes.data, self.rows_np.nbytes, 0)
+        if not self.mr:
+            raise RuntimeError("ple rdma: local MR registration failed (memlock ulimit?)")
+        self.lkey = L.ple_mr_lkey(self.mr)
+        self._rlock = threading.Lock()  # one reconnect at a time (worker + sync path)
+        self.client = self._connect_forever()
         self.loaded = np.asarray(sorted(self.client.remote["loaded_shards"]))
-        self.full = self.loaded.size * self.shard_size >= self.rows_total
-        if not self.full:
-            raise RuntimeError(
-                "ple rdma: server holds a subset of the table; the mmap-backed "
-                "subset/VERIFY modes were removed — serve all shards")
+        self.full = True
 
         self._q: "queue.Queue[_Job]" = queue.Queue()
         self._jobs: list[_Job | None] = [None, None]
@@ -279,29 +306,54 @@ class RdmaPleTable:
             raise IndexError(f"PLE rdma: row id out of range [{ids.min()}, {ids.max()}]")
         return self._read(ids)
 
-    def _robust_read(self, ids: np.ndarray, dst_row: int) -> None:
-        """READ with retry-until-success: a hiccup stalls the engine (loud
-        ERROR per attempt) instead of degrading to any other row source.
-        Each reconnect re-registers the pinned MR and leaks the old QP/MR —
-        acceptable for rare server bounces."""
+    def _connect_forever(self) -> Client:
+        """Dial + QP exchange, retrying every 2 s until it works. Used for the
+        initial connection (engine load stalls loudly instead of dying) and
+        for every reconnect."""
         attempt = 0
         while True:
             try:
-                self.client.read_rows_at(ids, dst_row)
+                c = Client(self.host, self.port, self.dev, self.lkey,
+                           self.rows_np.ctypes.data, self.row_bytes)
+                r = c.remote
+                if r["row_bytes"] != self.row_bytes:
+                    raise RuntimeError("row_bytes mismatch with server")
+                if len(r["loaded_shards"]) * self.shard_size < self.rows_total:
+                    raise RuntimeError("server holds a subset of the table — serve all shards")
+                if attempt:
+                    logger.warning("PLE rdma: connected after %d retries", attempt)
+                return c
+            except Exception as e:
+                attempt += 1
+                logger.error("PLE rdma: connect to %s:%d failed (%s) — retry %d in 2s, stalling",
+                             self.host, self.port, e, attempt)
+                time.sleep(2.0)
+
+    def _robust_read(self, ids: np.ndarray, dst_row: int) -> None:
+        """READ with retry-until-success: a hiccup stalls the engine (loud
+        ERROR per attempt) instead of degrading to any other row source.
+        The dead socket/QP is closed BEFORE redialing so the server sees the
+        old session end and can take the new one."""
+        attempt = 0
+        while True:
+            c = self.client
+            try:
+                c.read_rows_at(ids, dst_row)
                 if attempt:
                     logger.warning("PLE rdma: READ recovered after %d retries", attempt)
                 return
             except Exception as e:
                 attempt += 1
-                logger.error(
-                    "PLE rdma: READ failed (%s) — retry %d in 2s, stalling (no fallback)",
-                    e, attempt)
-                time.sleep(2.0)
-                try:
-                    self.client = Client(self.host, self.port, self.dev_name,
-                                         self.gid, self.rows_np, self.row_bytes)
-                except Exception as e2:
-                    logger.error("PLE rdma: reconnect failed (%s)", e2)
+                logger.error("PLE rdma: READ failed (%s) — retry %d in 2s, stalling (no fallback)",
+                             e, attempt)
+                with self._rlock:
+                    if self.client is c:  # another thread may have already reconnected
+                        try:
+                            c.close()
+                        except Exception:
+                            pass
+                        time.sleep(2.0)
+                        self.client = self._connect_forever()
 
     def _read(self, ids: np.ndarray) -> np.ndarray:
         base = 2 * _SLOT  # dedicated sync region, untouched by the worker

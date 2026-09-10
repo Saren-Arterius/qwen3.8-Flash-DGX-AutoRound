@@ -11,7 +11,7 @@ p = argparse.ArgumentParser()
 p.add_argument("table_dir")
 p.add_argument("--shards", default=None, help="e.g. 0-3 (test subset)")
 p.add_argument("--dev", default="rocep1s0f0")
-p.add_argument("--gid", type=int, default=3)
+p.add_argument("--gid", type=int, default=None)  # None = auto-detect
 p.add_argument("--port", type=int, default=18515)
 a = p.parse_args()
 
