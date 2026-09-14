@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Qwen3.8-Flash-Next (hibrid47: NVFP4 n-gram table demand-paged, fp8 KV) on ONE DGX Spark: download if needed, wait for
+# Qwen3.8-Flash-Next (hibrid48: NVFP4 n-gram table demand-paged + NVFP4 output head, vLLM 0.29, fp8 KV) on ONE DGX Spark: download if needed, wait for
 # memory, evict stale page cache, serve, wait healthy.
 # Everything is configured in recipe.yaml. OpenAI API on :$PORT. ./stop.sh stops, ./view.sh stats.
 set -euo pipefail
@@ -89,8 +89,10 @@ hf_access() {  # hf_access <hf-repo>   — exports HF_TOKEN when one is found or
 }
 # --------------------------------------------------------------------------------------------------------
 
-# --- weights: ~99G, resumable (rerun on interruption) -------------------------------------------
-if [ ! -f "$MODEL_DIR/model.safetensors.index.json" ]; then
+# --- weights: ~98G, resumable (rerun on interruption) -------------------------------------------
+# "complete" = the index is there AND no partial blob is left behind by an interrupted download (huggingface_hub keeps
+# them under .cache/huggingface/download/*.incomplete and resumes them) — the index lands early, so it alone proves nothing.
+if [ ! -f "$MODEL_DIR/model.safetensors.index.json" ] || [ -n "$(find "$MODEL_DIR/.cache" -name '*.incomplete' -print -quit 2>/dev/null)" ]; then
   hf_access "$HF_REPO" || exit 1
   echo "· downloading $HF_REPO -> $MODEL_DIR"
   if command -v hf >/dev/null; then
