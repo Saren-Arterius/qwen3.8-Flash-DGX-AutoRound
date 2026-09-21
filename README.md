@@ -24,13 +24,13 @@ patches — roughly **1.8× faster decode** than the NVFP4 recipe on the same bo
 > [write-up](https://github.com/jschmied/qwen38-flash-next-gb10), which also
 > contributed the concurrency findings below.
 
-| | llama.cpp IQ4_XS | upstream (vLLM NVFP4) | **this fork (int4/int8/fp8)** |
-|---|---|---|---|
-| Prefill | ~540 tok/s | ~2,000–2,600 tok/s | **~2,100–2,200 tok/s** |
-| Decode, single stream | ~22 tok/s (no MTP) | 25–28 tok/s (MTP=2) | **~50–60 tok/s (MTP=3)** |
-| Prefix caching | — | off (GDN kernel bug) | **on** (+ never-evict pin) |
-| Context | 262k | 262k native / 500k YaRN | 262k native / 500k YaRN |
-| Weights resident | ~94 GiB (GGUF) | ~76 GiB | **~68 GiB** |
+| | **this fork (int4/int8/fp8)** |
+|---|---|
+| Prefill | **~2,100–2,200 tok/s** |
+| Decode, single stream |**~50–60 tok/s (MTP=3)** |
+| Prefix caching | **on** (+ never-evict pin) |
+| Context | 262k native / 500k YaRN |
+| Weights resident | **~68 GiB** |
 
 ## Throughput and concurrency
 
