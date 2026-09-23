@@ -1,0 +1,49 @@
+# Qwen3.8-Flash-Next on the b12x stack: Eugr's b12x vLLM (b12x linear/GDN/QSA/PLE kernels)
+# carrying this repo's production patches, so serve-magi.sh can run either stack
+# (STACK=b12x ./serve-magi.sh -> scripts/serve-b12x.sh).
+#
+#   docker build -f Dockerfile.b12x -t qwen38-flash-b12x .
+#
+# Production patch parity (numbering as in Dockerfile):
+#   1/12 PLE table: RDMA only, hooked into b12x's disk row cache (src/vllm_ple_rdma_b12x.py)
+#   2-4  GB10 FLA fixes, lm_head quant_config, fp8 hybrid: azampatti's flashnext-int4-b12x mod
+#   5    mamba-aligned chunk splits: scheduler half patched; worker half is upstream here
+#   6, 8, 11, 13  never-evict pin, hit tracing, step profiler, prefill metrics: same scripts
+#   7    vllm#50729 is upstream here; the bounds guard is src/patch_mamba_guard.py
+#   9/10 deterministic QSA top-k: native (b12x QSA = exact radix top-k + stable tie-break)
+#   14   draft vocab / int4 draft head: not ported (inert in serve-magi.sh)
+#
+# Base: the 2026-09-13 b12x build (vLLM 0.1.dev20759), pinned by digest as in azampatti's
+# eugr-setup.sh (ab17bb0) -- Eugr's later builds move the model code.
+FROM eugr/spark-vllm-b12x@sha256:8e7e062186f841453ef0ec6f713043c5b65447decc3835206685128c18e42262
+ARG SP=/usr/local/lib/python3.12/dist-packages
+
+# --- 2-4. azampatti/Qwen3.8-Flash-Next-Int4-FAST ab17bb0 flashnext-int4-b12x (verbatim): fp8
+# hybrid with index-filtered dtypes, lm_head quant_config, loader index filters, GDN fixes,
+# draft-logit scale (inert unless VLLM_MTP_DRAFT_SCALE is set).
+COPY src/b12x/patch_b12x.py src/b12x/vllm_fp8_hybrid.py /opt/flashnext/mod/
+RUN python3 /opt/flashnext/mod/patch_b12x.py /opt/flashnext/mod
+
+# --- 5, 6, 8, 11, 13. Production patch scripts (anchors hold on both vLLM trees)
+COPY src/patch_mamba_align_split.py src/patch_never_evict.py src/patch_hit_debug.py \
+     src/patch_step_profile.py src/patch_prefill_metrics.py /tmp/p/
+RUN for p in patch_mamba_align_split.py patch_never_evict.py patch_hit_debug.py \
+             patch_step_profile.py patch_prefill_metrics.py; do python3 /tmp/p/$p || exit 1; done \
+ && rm -rf /tmp/p
+
+# --- 7. Mamba state-copy bounds guard (src/test_mamba_guard_gpu.py checks it on the GPU)
+COPY src/patch_mamba_guard.py /tmp/patch_mamba_guard.py
+RUN python3 /tmp/patch_mamba_guard.py ${SP}/vllm/v1/worker/mamba_utils.py && rm /tmp/patch_mamba_guard.py
+COPY src/test_mamba_guard_gpu.py /opt/llm/test_mamba_guard_gpu.py
+
+# --- 12. PLE table over RDMA (VLLM_PLE_RDMA=<host:port> + VLLM_PLE_TABLE_MEMORY=disk)
+COPY src/ple_rdma/ple_rdma.c /tmp/ple_rdma.c
+RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs -o ${SP}/libple_rdma.so && rm /tmp/ple_rdma.c
+COPY src/vllm_ple_rdma.py src/vllm_ple_rdma_b12x.py ${SP}/
+RUN printf '\n\n# --- qwen38-flash-dgx: PLE table over RDMA (VLLM_PLE_RDMA) ---\nfrom vllm_ple_rdma_b12x import apply as _ple_rdma_apply\n_ple_rdma_apply(Qwen3_8FlashNextNGramEmbedding)\n' \
+      >> ${SP}/vllm/models/qwen3_8_flash_next/ple_layer.py \
+ && python3 -c "import ast; ast.parse(open('${SP}/vllm/models/qwen3_8_flash_next/ple_layer.py').read()); print('ple_layer.py: RDMA hook OK')"
+
+# Model views (config fields b12x needs + the slim MTP draft folder), built per container start
+COPY src/b12x/build_views.py /opt/flashnext/build_views.py
+ENTRYPOINT ["sh", "-c", "python3 /opt/flashnext/build_views.py /model-src /workspace/flashnext && exec vllm serve \"$@\"", "--"]

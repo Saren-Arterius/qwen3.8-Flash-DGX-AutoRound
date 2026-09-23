@@ -48,4 +48,5 @@ export STEP_PROFILE=0
 export ITER_DETAILS=1
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 
-exec scripts/serve-intel-ar.sh
+# STACK=b12x: the same settings on the b12x stack (Dockerfile.b12x, scripts/serve-b12x.sh)
+exec scripts/serve-${STACK:-intel-ar}.sh

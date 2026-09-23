@@ -43,8 +43,7 @@ def edit(path: str, old: str, new: str) -> None:
 edit(
     SCHED,
     """        block_size = self.cache_config.block_size
-        # The last block-aligned position whose state can be cached. With
-""",
+        # The last block-aligned position whose state can be cached.""",
     """        # cache_config.block_size is the MINIMUM across KV cache groups (the
         # fine/draft granularity), but this function's whole job is to end
         # chunks at MAMBA state boundaries. With the fine size, chunk ends
@@ -54,8 +53,7 @@ edit(
         block_size = (
             self.cache_config.mamba_block_size or self.cache_config.block_size
         )
-        # The last block-aligned position whose state can be cached. With
-""",
+        # The last block-aligned position whose state can be cached.""",
 )
 
 # Second half of the same bug, diagnosed upstream (blazux/qwen3.8-Flash-DGX
@@ -64,12 +62,15 @@ edit(
 # column 799 instead of 3 -> reads past the block-table row -> garbage/null
 # block id -> the state restore is skipped (see mamba_utils_guarded.py) and
 # the request runs on a zero/stale mamba state: greedy outputs change on
-# cache hits.
-edit(
-    MHYB,
-    """                (new_req_data.num_computed_tokens - 1) // self.cache_config.block_size
+# cache hits. Newer trees (the b12x image) carry that fix upstream.
+if "block_size = self.cache_config.mamba_block_size" in open(MHYB).read():
+    print("mamba_hybrid.py: state-slot seed already per mamba block (upstream)", file=sys.stderr)
+else:
+    edit(
+        MHYB,
+        """                (new_req_data.num_computed_tokens - 1) // self.cache_config.block_size
 """,
-    """                (new_req_data.num_computed_tokens - 1)
+        """                (new_req_data.num_computed_tokens - 1)
                 # block_size is the MIN across KV groups; the state slot is
                 # per MAMBA block (blazux/qwen3.8-Flash-DGX#2, 8347e7c).
                 // (
@@ -77,7 +78,7 @@ edit(
                     or self.cache_config.block_size
                 )
 """,
-)
+    )
 
 ast.parse(open(SCHED).read())
 ast.parse(open(MHYB).read())

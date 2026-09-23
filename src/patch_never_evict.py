@@ -18,6 +18,7 @@ mis-patching.
 """
 
 import ast
+import re
 import sys
 
 SP = "/usr/local/lib/python3.12/dist-packages/vllm"
@@ -316,14 +317,18 @@ edit(
 class Scheduler(SchedulerInterface):
 ''',
 )
+# After the KVCacheManager(...) construction: anchored on its watermark kwarg and
+# the call's closing paren, since newer trees (the b12x image) pass more kwargs.
+_sched = open(FILES["sched"]).read()
+_m = re.search(
+    r"            watermark=self\.scheduler_config\.watermark,\n(?:            [^\n]*\n)*?        \)\n",
+    _sched,
+)
+assert _m and _sched.count(_m.group(0)) == 1, "KVCacheManager(...) watermark anchor not found once"
 edit(
     FILES["sched"],
-    """            watermark=self.scheduler_config.watermark,
-        )
-""",
-    """            watermark=self.scheduler_config.watermark,
-        )
-
+    _m.group(0),
+    _m.group(0) + """
         # --never-evict-kv-cache-prompt-includes: token-id needle matched
         # against every new request's prompt.
         self._pin_needle: list[int] = []
