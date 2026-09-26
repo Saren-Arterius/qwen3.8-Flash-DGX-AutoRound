@@ -2,35 +2,31 @@
 # Flag mapping: `name: value` -> --name value | `name: true` -> --name | `name: false` -> omitted.
 
 server:
-  image: myllmbox/qwen38-flash-next-vllm:v3     # pinned public tag (digest in README) = vLLM 0.29.0 (vllm/vllm-openai) + eight
-                                                # patches: the NVFP4 n-gram table demand-paged from the checkpoint files (never
-                                                # allocated, populated into memory after boot); the 4-bit output head (hibrid48) —
-                                                # stock 0.29 cannot load it; fp8 KV on the QSA path; the loader's page-cache hygiene.
-                                                # v2 (vendor pin, hibrid47) = `git checkout v2`.
+  image: myllmbox/qwen38-flash-next-vllm:v4     # pinned public tag (digest in README) = vLLM 0.30.0 (vllm/vllm-openai) + patches:
+                                                # the NVFP4 n-gram table, the 4-bit output head (hibrid48) — stock 0.30 cannot load
+                                                # either — the fused multi-step MTP draft, the loader's page-cache hygiene.
+                                                # v3 (vLLM 0.29, image v3) = `git checkout v3`.
+  docker_args: --security-opt seccomp=unconfined   # required by the image's table reader
   cpuset: "5-9,15-19"                           # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
                                                 # are 2.8GHz A725) — measured +2-3% at every concurrency
   model: myllmbox/Qwen3.8-Flash-Next-hibrid48   # HF repo — downloaded into ./models on first run (~98G)
-                                                # = hibrid47 + the output head as NVFP4: 17.7 engine steps/s (was 14.4)
   # model: myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored   # the abliterated body (OrcaRouter) with the same head, 98G:
                                                 # no refusals, NO guardrails — research / red-teaming / private use behind your
                                                 # own moderation. GATED on Hugging Face: accept its agreement, then hf auth login
-                                                # or export HF_TOKEN (run.sh checks). Same shapes tensor for tensor → same speed;
-                                                # nothing else in this file changes. Set served-model-name to
-                                                # Qwen/Qwen3.8-Flash-Next-Uncensored if you run both and want them told apart.
+                                                # or export HF_TOKEN (run.sh checks). Same n-gram table, same speed; nothing else
+                                                # in this file changes. Set served-model-name to Qwen/Qwen3.8-Flash-Next-Uncensored
+                                                # if you run both and want them told apart.
   port: 8000
   models_dir: ./models
-  cache_dir: ./cache                            # compile caches + the table's flag files; deletable, first boot rebuilds
+  cache_dir: ./cache                            # compile caches + the table map (~31G, prepared on the first boot); deletable,
+                                                # the next boot rebuilds it
 
 env:
-  # The n-gram (PLE) table — 26.9 GiB in NVFP4 — is never allocated. Its 8 shard files are mapped and the GPU gathers
-  # rows straight out of the mapping (GB10 unified memory). Boot holds ~72 GiB of weights, so autotune has room; after
-  # warm-up the whole table is pulled into memory once and stays there (the kernel may page rows out under pressure —
-  # they come back on demand). Force a pass any time: ./ple.sh populate
   MBX_PLE_MMAP: "1"
-  MBX_PLE_MMAP_MODE: "auto"                     # direct NVMe reads during boot, memory-mapped gather from then on
-  MBX_PLE_MMAP_PREWARM: "auto"                  # populate the whole table right after boot ("0" = fill on demand only)
-  # No OMP_NUM_THREADS: vLLM 0.29 sizes its threads itself (many for the load, one for serving); a fixed value hurts one phase.
-  # No MBX_VOCAB_GEMV: the NVFP4 output head replaces v2's bf16-head GEMV.
+  MBX_PLE_MMAP_MODE: "nvme"
+  MBX_PLE_MMAP_PREWARM: "0"
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
+  # No OMP_NUM_THREADS: vLLM sizes its threads itself (many for the load, one for serving); a fixed value hurts one phase.
   PYTHONUNBUFFERED: "1"                         # load progress actually shows in ./view.sh
   VLLM_MARLIN_USE_ATOMIC_ADD: "1"               # Marlin small-N fast path (self-gating)
   TORCH_CUDA_ARCH_LIST: "12.1a"
@@ -40,25 +36,25 @@ env:
 
 vllm:
   served-model-name: Qwen/Qwen3.8-Flash-Next
-  moe-backend: marlin                           # fastest MoE kernel for NVFP4 W4A16 on the GB10 in 0.29
+  engram-config: '{"cpu_offload": false}'
+  gdn-prefill-backend: triton
+  moe-backend: marlin                           # fastest MoE kernel for NVFP4 W4A16 on the GB10
   distributed-executor-backend: mp
   gpu-memory-utilization: 0.70                  # with kv-cache-memory pinned this does not size the KV pool
-  kv-cache-memory: "8000000000"                 # 8G fp8 = 447,935 KV tokens (measured); the table takes the rest of the
-                                                # box — a bigger pin means fewer table rows resident, not a faster serve
-  kv-cache-dtype: fp8                           # the image's PR #54846 port; costs no acceptance at K=3 (measured 3.41 vs
-                                                # 3.32 bf16). Drop the line for bf16 (~250k tokens)
-  max-model-len: 262144                         # the model's native max (1.7 max-length requests fit the pool)
-  # 0.29 rounds every FULL decode-graph size UP to a multiple of K+1 (=4) and drops sizes past the largest listed → the
-  # list must reach seats×4 = 32 or the upper seats decode without a graph. Multiples of 4 = every seat count 1…8 exact.
-  compilation-config: '{"cudagraph_mode":"FULL_AND_PIECEWISE","cudagraph_capture_sizes":[1,2,4,8,12,16,20,24,28,32],"compile_ranges_endpoints":[32]}'
-  max-num-seqs: 8                               # ~12% of the pool per running request is the model's GDN state, any length:
-                                                # 8 seats = ~3k tokens of context each, 4 = ~50k, 1-2 = the full 262k
+  kv-cache-memory: "27000000000"                # 27G bf16 = 830,582 KV tokens (3.17 full 262K requests). Leaves ~2G available
+                                                # at 16 streams; 26G if you run other things on the box
+  load-format: fastsafetensors                  # weights in ~80 s; remove for vLLM's default loader (~10 min)
+  max-model-len: 262144                         # the model's native max
+  block-size: 1632                              # required at K=5 (the model's attention ring must divide the block)
+  compilation-config: '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,6,8,12,16,18,24,30,36,42,48,54,60,66,72,78,84,90,96],"compile_ranges_endpoints":[32]}'
+                                                # sizes = multiples of K+1 (=6) up to seats × 6; shorten only with max-num-seqs
+  max-num-seqs: 16                              # each running request pins ~36k tokens of pool (the model's GDN state, K=5):
+                                                # 16 seats is the practical top of this pool
   max-num-batched-tokens: 8192                  # also the image-input encoder budget — keep for image requests
   enable-prefix-caching: true
   enable-auto-tool-choice: true
   tool-call-parser: qwen3_xml
   reasoning-parser: qwen3
-  speculative-config: '{"method":"mtp","num_speculative_tokens":3}'   # K=3: acceptance ~3.4 on code, ~2.8 on reasoning. K=4
-                                                # measured: +3-8% tok/s for -10% steps, and the 8th seat no longer fits the pool
-                                                # (its GDN state is one block larger) — see README
-  async-scheduling: true                        # +9-12% throughput at c=4-5, neutral at c=8
+  speculative-config: '{"method":"mtp","num_speculative_tokens":5,"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
+                                                # 5 draft tokens sampled from the drafter: ~5.1 of 6 accepted on code
+  async-scheduling: true

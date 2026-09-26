@@ -31,6 +31,7 @@ IMAGE="$(rkey server image)";       PORT="$(rkey server port)"
 HF_REPO="$(rkey server model)"
 MODELS_DIR="$(rkey server models_dir)"; CACHE_DIR="$(rkey server cache_dir)"
 CPUSET="$(rkey server cpuset)"
+DOCKER_ARGS="$(rkey server docker_args)"
 NAME="qwen38-flash-next"
 mkdir -p "$MODELS_DIR" "$CACHE_DIR"
 MODELS_ABS="$(cd "$MODELS_DIR" && pwd)"; CACHE_ABS="$(cd "$CACHE_DIR" && pwd)"
@@ -141,10 +142,10 @@ done
 # that are FREE, and a 60-70G stale shard cache during the load has stalled it
 find "$MODEL_DIR" -type f -name "*.safetensors" -exec dd if={} iflag=nocache count=0 status=none \; 2>/dev/null || true
 echo "  · page cache: checkpoint files evicted — MemFree $(awk '/^MemFree/{printf "%d", $2/1048576}' /proc/meminfo)G"
-[ "$(free -g | awk '/^Swap:/{print $2}')" -gt 0 ] || echo "  · no swap on this box: fine — the table's rows are re-read from NVMe when the kernel needs the pages"
-echo "· starting $NAME  ($IMAGE)  on :$PORT — first boot reaches healthy in ~12 min (weights 11 min), then the table populates (~30 s)"
+echo "· starting $NAME  ($IMAGE)  on :$PORT — healthy in ~4 min; the very first boot on a box also prepares the table map (a few minutes, once)"
 docker run -d --name "$NAME" --gpus all --ipc=host \
   ${CPUSET:+--cpuset-cpus "$CPUSET"} \
+  ${DOCKER_ARGS} \
   -p "$PORT:8000" \
   -v "$MODELS_ABS:/models" -v "$CACHE_ABS:/cache" \
   -v "$(readlink -f "$MODEL_DIR"):/models/$LOCAL_NAME" \
@@ -157,10 +158,10 @@ docker run -d --name "$NAME" --gpus all --ipc=host \
 echo "· streaming engine logs until healthy (Ctrl-C detaches; the container keeps booting)"
 docker logs -f "$NAME" 2>&1 &
 LOGS=$!
-trap 'kill "$LOGS" 2>/dev/null' EXIT INT TERM
+trap 'kill "$LOGS" 2>/dev/null || true' EXIT INT TERM
 for i in $(seq 1 240); do
   if curl -sf -m 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    kill "$LOGS" 2>/dev/null; wait "$LOGS" 2>/dev/null
+    kill "$LOGS" 2>/dev/null || true; wait "$LOGS" 2>/dev/null || true
     echo
     echo "──────────────────────────────────────────────────────────"
     echo "✓ server booted — OpenAI-compatible API is live"
@@ -172,7 +173,7 @@ for i in $(seq 1 240); do
     exit 0
   fi
   if ! docker ps -q --filter "name=$NAME" | grep -q .; then
-    kill "$LOGS" 2>/dev/null; wait "$LOGS" 2>/dev/null
+    kill "$LOGS" 2>/dev/null || true; wait "$LOGS" 2>/dev/null || true
     echo "✗ container exited — see above"; exit 1
   fi
   sleep 5
