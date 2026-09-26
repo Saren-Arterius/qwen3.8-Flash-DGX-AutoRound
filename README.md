@@ -183,8 +183,6 @@ edit that refuses to apply twice and fails the build if its target moved:
 5. **the table library** (`/opt/mbx/lib/libmbx_ple_nvme.so`, binary): prepares and serves the table map; it only accepts this
    release's n-gram table and stops with "invalid quant" otherwise.
 
-The Dockerfile and the patch scripts live in the myllmbox repo under
-[`recipes/qwen38-flash-next/`](https://github.com/bilikaz/myllmbox-runner/tree/main/recipes/qwen38-flash-next).
 Digest: `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`.
 
 v3 (`…-vllm:v3`, vLLM 0.29, digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay
@@ -192,9 +190,8 @@ available: `git checkout v3` / `v2` / `v1`.
 
 ## The full box
 
-This kit serves one model, plain. The same model runs under
-[myllmbox](https://github.com/bilikaz/myllmbox-runner) with a public HTTPS tunnel, keepalive and multi-model
-management — same image, same weights, one `./run.sh qwen38-flash-next`.
+This kit serves one model, plain. The same model also runs under [myllmbox](https://myllmbox.com) with a public HTTPS
+tunnel, keepalive and multi-model management — same image, same weights.
 
 ## License
 
