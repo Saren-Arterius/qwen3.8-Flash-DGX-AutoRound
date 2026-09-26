@@ -185,7 +185,7 @@ edit that refuses to apply twice and fails the build if its target moved:
 
 The Dockerfile and the patch scripts live in the myllmbox repo under
 [`recipes/qwen38-flash-next/`](https://github.com/bilikaz/myllmbox-runner/tree/main/recipes/qwen38-flash-next).
-Digest: `sha256:b306c1c8a66003a419ae3b825e95339f44975d8f4b215292791f0379e8e9d17a`.
+Digest: `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`.
 
 v3 (`…-vllm:v3`, vLLM 0.29, digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay
 available: `git checkout v3` / `v2` / `v1`.
