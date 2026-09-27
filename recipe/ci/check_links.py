@@ -34,7 +34,7 @@ def main() -> None:
             continue
         content = md.read_text(encoding="utf-8")
         links = re.findall(r"!?(?:\[[^\]]*\])\(([^)]+)\)", content)
-        links += re.findall(r"<(?:img|a)\s+[^>]*(?:src|href)=\"([^\"]+)\"", content)
+        links += re.findall(r"<(?:img|a|source)\s+[^>]*(?:srcset|src|href)=\"([^\"]+)\"", content)
         for link in links:
             destination = link.split('"')[0].strip()
             if destination.startswith(("https://", "http://", "mailto:")):

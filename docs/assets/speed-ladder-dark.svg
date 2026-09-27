@@ -1,0 +1,27 @@
+<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" role="img" aria-label="Decode step time">
+<style>text{font-family:Inter, Manrope, "Space Grotesk", system-ui, Arial, sans-serif}</style>
+<text x="60" y="49" fill="#e8f0f4" font-size="27" font-weight="750">Decode step time</text>
+<text x="60" y="78" fill="#a9bbc5" font-size="15">Measured coding windows · one GB10 · lower is faster</text>
+<line x1="180.0" y1="116" x2="180.0" y2="380" stroke="#607583" opacity=".40"/>
+<text x="180.0" y="407" text-anchor="middle" fill="#a9bbc5" font-size="14">0</text>
+<line x1="338.7" y1="116" x2="338.7" y2="380" stroke="#607583" opacity=".40"/>
+<text x="338.7" y="407" text-anchor="middle" fill="#a9bbc5" font-size="14">20</text>
+<line x1="497.3" y1="116" x2="497.3" y2="380" stroke="#607583" opacity=".40"/>
+<text x="497.3" y="407" text-anchor="middle" fill="#a9bbc5" font-size="14">40</text>
+<line x1="656.0" y1="116" x2="656.0" y2="380" stroke="#607583" opacity=".40"/>
+<text x="656.0" y="407" text-anchor="middle" fill="#a9bbc5" font-size="14">60</text>
+<text x="158" y="159" text-anchor="end" fill="#e8f0f4" font-size="17" font-weight="650">Original</text>
+<rect x="180" y="138" width="541.7" height="28" rx="5" fill="#68d9e0"/>
+<text x="735.7" y="159" fill="#68d9e0" font-size="17" font-weight="750">68.3</text>
+<text x="158" y="221" text-anchor="end" fill="#e8f0f4" font-size="17" font-weight="650">v13</text>
+<rect x="180" y="200" width="532.9" height="28" rx="5" fill="#68d9e0"/>
+<text x="726.9" y="221" fill="#68d9e0" font-size="17" font-weight="750">67.2</text>
+<text x="158" y="283" text-anchor="end" fill="#e8f0f4" font-size="17" font-weight="650">v15</text>
+<rect x="180" y="262" width="441.5" height="28" rx="5" fill="#68d9e0"/>
+<text x="635.5" y="283" fill="#68d9e0" font-size="17" font-weight="750">55.7</text>
+<text x="158" y="345" text-anchor="end" fill="#e8f0f4" font-size="17" font-weight="650">v16b</text>
+<rect x="180" y="324" width="415.2" height="28" rx="5" fill="#68d9e0"/>
+<text x="609.2" y="345" fill="#68d9e0" font-size="17" font-weight="750">52.3</text>
+<text x="478" y="443" text-anchor="middle" fill="#a9bbc5" font-size="15">Milliseconds per decode step</text>
+</svg>

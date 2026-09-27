@@ -3,7 +3,7 @@
 
 ## v16b — promoted configuration
 
-The v16b recipe combines the T80 dense-MTP drafter head, iteration-6d image, low-latency GEMM, verify-path top-k and retained draft blocks. Its candidate-window decode step measured **52.33 ms**. Measured peak decode throughput on one GB10 is **73.2 / 73.8 / 115.1 / 129.1 / 146.3 tok/s at 1 / 2 / 3 / 4 / 5 streams**. The single-stream value comes from a copy-heavy request; multi-stream aggregates come from equal-length decode windows. The two evaluation seeds scored **459/492** and **458/492**.
+The v16b recipe combines the T80 dense-MTP drafter head, iteration-6d image, low-latency GEMM, verify-path top-k and retained draft blocks. Its candidate-window decode step measured **52.33 ms**. Three copy-heavy rounds at each stream count on one GB10 measured peak decode throughput of **74.1 / 110.0 / 132.9 / 155.5 / 174.9 tok/s at 1 / 2 / 3 / 4 / 5 streams**. The two evaluation seeds scored **459/492** and **458/492**.
 
 This release includes the pinned public checkpoint downloads, T80 builder and reference report, complete iter6c-to-iter6d image inputs, source hash preflight and CPU tests.
 

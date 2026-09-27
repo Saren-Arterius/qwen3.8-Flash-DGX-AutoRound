@@ -6,7 +6,7 @@ Upstream-derived code is licensed under Apache-2.0. This includes recipe/Dockerf
 recipe/tools/, recipe/scripts/, recipe/build/, recipe/benchmarks/decode_bench.py,
 and recipe/config/v16b/serve.sh and launch.sh. See docs/LICENSES/Apache-2.0.txt and docs/NOTICE.
 
-Original code, including chart generation, CI gates and the two program benchmark drivers,
+Original code, including chart generation, CI gates and the benchmark drivers,
 is licensed under PolyForm Noncommercial 1.0.0. See
 docs/LICENSES/LicenseRef-PolyForm-Noncommercial-1.0.0.md.
 
