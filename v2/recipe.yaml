@@ -1,0 +1,66 @@
+# magi-v2 production config (llm branch magi-v2): recipe v4 + hibrid48 + NVFP4 PLE rows over RDMA from wtako
+# (ple-nvfp4-rdma-server.service, :18516) + MTP=3 + never-evict pin + 20 GiB KV, served as "qwen". Started by ../serve-magi.sh.
+# The one and only config. run.sh reads THIS — there is nothing else to configure.
+# Flag mapping: `name: value` -> --name value | `name: true` -> --name | `name: false` -> omitted.
+
+server:
+  image: qwen38-flash-dgx:magi-v2                 # pinned public tag (digest in README) = vLLM 0.30.0 (vllm/vllm-openai) + patches:
+                                                # the NVFP4 n-gram table, the 4-bit output head (hibrid48) — stock 0.30 cannot load
+                                                # either — the fused multi-step MTP draft, the loader's page-cache hygiene.
+                                                # v3 (vLLM 0.29, image v3) = `git checkout v3`.
+  docker_args: --security-opt seccomp=unconfined --device /dev/infiniband --ulimit memlock=-1:-1   # required by the image's table reader
+  cpuset: "5-9,15-19"                           # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
+                                                # are 2.8GHz A725) — measured +2-3% at every concurrency
+  model: myllmbox/Qwen3.8-Flash-Next-hibrid48   # HF repo — downloaded into ./models on first run (~98G)
+  # model: myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored   # the abliterated body (OrcaRouter) with the same head, 98G:
+                                                # no refusals, NO guardrails — research / red-teaming / private use behind your
+                                                # own moderation. GATED on Hugging Face: accept its agreement, then hf auth login
+                                                # or export HF_TOKEN (run.sh checks). Same n-gram table, same speed; nothing else
+                                                # in this file changes. Set served-model-name to Qwen/Qwen3.8-Flash-Next-Uncensored
+                                                # if you run both and want them told apart.
+  port: 8000
+  models_dir: /mnt/storage@WTAKO/saren/AI            # magi-v2: weights on wtako NFS (PLE rows come over RDMA anyway)
+  cache_dir: /home/saren/magi-v2-cache                            # compile caches + the table map (~31G, prepared on the first boot); deletable,
+                                                # the next boot rebuilds it
+
+env:
+  MBX_PLE_RDMA: 192.168.0.1:18516                # recipe-bench B1: rows from wtako ple-nvfp4-rdma-server (needs MMAP_MODE nvme)
+  MBX_PLE_PROF: "1"                             # recipe-bench: time the table reads (RDMA would replace)
+  MBX_PLE_MMAP: "1"
+  MBX_PLE_MMAP_MODE: "nvme"
+  MBX_PLE_MMAP_PREWARM: "0"
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
+  # No OMP_NUM_THREADS: vLLM sizes its threads itself (many for the load, one for serving); a fixed value hurts one phase.
+  PYTHONUNBUFFERED: "1"                         # load progress actually shows in ./view.sh
+  VLLM_MARLIN_USE_ATOMIC_ADD: "1"               # Marlin small-N fast path (self-gating)
+  TORCH_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+  MALLOC_MMAP_THRESHOLD_: "65536"               # glibc returns big freed blocks to the OS at once (the loader's
+  MALLOC_TRIM_THRESHOLD_: "131072"              # garbage otherwise stays resident — and swaps)
+
+vllm:
+  served-model-name: qwen
+  engram-config: '{"cpu_offload": false}'
+  gdn-prefill-backend: triton
+  moe-backend: marlin                           # fastest MoE kernel for NVFP4 W4A16 on the GB10
+  distributed-executor-backend: mp
+  gpu-memory-utilization: 0.01                  # as v1 (GPU_MEM=0.01): KV is pinned by kv-cache-memory; keep vLLM from claiming a fraction
+  kv-cache-memory: "21474836480"                # magi-v2: 20 GiB = 691,493 tokens (2.64 full 262K requests), room for q3asr + voxcpm
+                                                # at 16 streams; 26G if you run other things on the box
+  load-format: fastsafetensors                  # weights in ~80 s; remove for vLLM's default loader (~10 min)
+  max-model-len: 262144                         # the model's native max
+  # block-size: 1632  (K=5 only; removed for K=3 as the README does for K=4)                              # required at K=5 (the model's attention ring must divide the block)
+  compilation-config: '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64],"compile_ranges_endpoints":[32]}'
+                                                # sizes = multiples of K+1 (=6) up to seats × 6; shorten only with max-num-seqs
+  max-num-seqs: 16                              # each running request pins ~36k tokens of pool (the model's GDN state, K=5):
+                                                # 16 seats is the practical top of this pool
+  max-num-batched-tokens: 8192                  # also the image-input encoder budget — keep for image requests
+  enable-prefix-caching: true
+  enable-auto-tool-choice: true
+  tool-call-parser: qwen3_xml
+  reasoning-parser: qwen3
+  speculative-config: '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
+                                                # 5 draft tokens sampled from the drafter: ~5.1 of 6 accepted on code
+  async-scheduling: true
+  never-evict-kv-cache-prompt-includes: You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.
+  never-evict-kv-cache-max-fraction: 0.25        # ported from magi A (PIN_PROMPT)

@@ -1,51 +1,7 @@
 #!/usr/bin/env bash
-# magi's serving config (the config commit on the "magi" branch); everything
-# machine-specific lives here — scripts/serve-intel-ar.sh stays generic.
-cd "$(dirname "$0")"
-
-# int4 MTP draft experts variant (tools/quantize_mtp_experts_int4.py, 2026-09-09):
-# -3.5 GiB, +2-4% decode, acceptance unchanged. bf16-draft original: the dir without -mtpint4.
-export MODEL_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-mtpint4"
-export FP8_HYBRID=1
-# PLE rows come from wtako's ple-rdma-server. RDMA mode is exclusive: no
-# local table, no mmap — failed READs retry/stall instead of falling back.
-# /mnt/ple-ram is swap-only since the 2026-08-30 cutover.
-export TABLE_DIR=
-export PLE_RDMA=192.168.0.1:18515
-
-# export YARN=1
-# export CTX=1000000
-
-export SEQS=16
-export TOOL_PARSER=qwen3_xml
-export PORT=8000
-export SERVED_NAME=qwen
-# Deterministic memory: weights (~71.4G) + fixed 20G KV (~640k tokens)
-# + activations, leaving real headroom for OS/q3asr/voxcpm/page cache.
-# Replaces fraction sizing after dmesg showed NVRM NV_ERR_NO_MEMORY + Xid 31
-# MMU faults: the unified pool was oversubscribed and the "illegal memory
-# access" crashes tracked failed driver allocations.
-export GPU_MEM=0.01
-export KV_BYTES=24g
-export MTP=3
-# Reduced draft vocabulary OFF here: the 65k id set (English/code-weighted corpus)
-# hurts draft acceptance and hence tg on CJK output (observed 2026-09-09).
-export DRAFT_VOCAB=0
-# DRAFT_HEAD=int4 (private int4 RTN head, half the bytes per draft step) measured
-# 2026-09-10: tg unchanged within noise, acceptance 1-8 points lower (tc/yue/en/code).
-# The bandwidth saved is given back in rejected drafts, so the shared int8 head stays.
-# 8192-token prefill budget: chunks snap to 8000 (5 mamba blocks) with 192 spare
-# for concurrent decodes (4 slots each at MTP=3). No LONG_PREFILL_THRESHOLD —
-# it costs single-stream prefill (extra chunk = extra drafter pass).
-export MAX_BATCHED=8192
-export PREFIX_CACHE=1
-# prefix-cache diagnosis: per-group hit breakdown, mamba publication,
-# eviction and chunk-stop logs (one-liners per request/step)
-# export HIT_DEBUG=1
-# on-demand step profiler (touch /tmp/profile_trigger in the container)
-export STEP_PROFILE=0
-# live prefill tok/s on /metrics (vllm:scheduled_ctx_tokens_total; bench/ppwatch.sh)
-export ITER_DETAILS=1
-export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
-
-exec scripts/serve-intel-ar.sh
+# magi's serving config — magi-v2 branch. Everything lives in v2/recipe.yaml: bilikaz/qwen38-flash-next-recipe v4
+# (hibrid48, vLLM 0.30) + NVFP4 PLE rows over RDMA from wtako's ple-nvfp4-rdma-server (:18516) + MTP=3 + never-evict
+# pin + 20 GiB KV, served as "qwen" in container qwen38-flash. Called by ~/magi-stack/ram-client-ple.sh.
+# Rollback to v1 (Intel AutoRound + fp8 table): git checkout magi here, revert the :18516 wait in ram-client-ple.sh,
+# and on wtako: systemctl disable --now ple-nvfp4-rdma-server && systemctl enable --now ple-rdma-server.
+exec "$(dirname "$(readlink -f "$0")")/v2/run.sh"

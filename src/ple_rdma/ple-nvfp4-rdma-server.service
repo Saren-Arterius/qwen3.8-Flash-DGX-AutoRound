@@ -1,0 +1,17 @@
+[Unit]
+Description=NVFP4 PLE table RDMA server (B1 test: hibrid48 table for the qwen38-flash-next recipe)
+After=network-online.target remote-fs.target
+Wants=network-online.target
+Conflicts=ple-rdma-server.service
+
+[Service]
+Type=simple
+User=saren
+LimitMEMLOCK=infinity
+Environment=PYTHONPATH=/media/03a7d067-e0f6-4c60-98f4-d3ae2e2ca692/vg0/Work/personal-programming/ple_rdma
+ExecStart=/usr/bin/python3 /media/03a7d067-e0f6-4c60-98f4-d3ae2e2ca692/vg0/Work/personal-programming/ple_rdma/ple_nvfp4_rdma_server.py /mnt/storage/saren/AI/ple-table-nvfp4
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
