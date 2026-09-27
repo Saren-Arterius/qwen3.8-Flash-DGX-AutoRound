@@ -39,22 +39,23 @@ def finish(parts, filename):
 
 def throughput_chart(theme, colors):
     samples = rows('throughput.csv')
-    assert [int(row['streams']) for row in samples] == [1, 2, 3, 4, 5]
+    assert [int(row['streams']) for row in samples] == list(range(1, 9))
     values = [float(row['peak_decode_tok_s']) for row in samples]
     parts = start('Peak decode throughput',
                   'Copy-heavy decode · three rounds per stream count · one GB10', colors)
     left, right, bottom, top = 105, 827, 366, 127
-    for tick in (0, 50, 100, 150):
-        y = bottom - (tick / 190) * (bottom - top)
+    scale = 230
+    for tick in (0, 50, 100, 150, 200):
+        y = bottom - (tick / scale) * (bottom - top)
         parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{right}" y2="{y:.1f}" stroke="{colors["grid"]}" opacity=".40"/>')
         parts.append(f'<text x="{left-18}" y="{y+5:.1f}" text-anchor="end" fill="{colors["muted"]}" font-size="14">{tick}</text>')
-    points = [(left + i * (right - left) / 4, bottom - value / 190 * (bottom - top))
+    points = [(left + i * (right - left) / 7, bottom - value / scale * (bottom - top))
               for i, value in enumerate(values)]
     path = ' '.join(f'{x:.1f},{y:.1f}' for x, y in points)
     parts.append(f'<polyline points="{path}" fill="none" stroke="{colors["accent"]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>')
     for count, ((x, y), value) in enumerate(zip(points, values), 1):
         parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="8" fill="{colors["accent"]}" stroke="{colors["point"]}" stroke-width="2"/>')
-        label_x, anchor = (x + 20, 'start') if count == 1 else (x, 'middle')
+        label_x, anchor = (x + 17, 'start') if count == 1 else (x, 'middle')
         parts.append(f'<text x="{label_x:.1f}" y="{y-19:.1f}" text-anchor="{anchor}" fill="{colors["accent"]}" font-size="19" font-weight="750">{value:.1f}</text>')
         parts.append(f'<text x="{x:.1f}" y="{bottom+30}" text-anchor="middle" fill="{colors["ink"]}" font-size="16" font-weight="650">{count}</text>')
     parts.append(f'<text x="{(left+right)/2:.1f}" y="443" text-anchor="middle" fill="{colors["muted"]}" font-size="15">Concurrent streams</text>')

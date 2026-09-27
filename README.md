@@ -3,13 +3,13 @@
 
 # Qwen3.8 Flash · DGX UltraFast
 
-A measured vLLM serving recipe for Qwen3.8-Flash-Next on one GB10.
+A public, digest-pinned vLLM recipe for Qwen3.8-Flash-Next on one GB10, with the image build, dense-MTP drafter builder, measured throughput rounds and quality record in the repository.
 
 Based on [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound) (Apache-2.0, (c) blazux).
 
-**74.1 tok/s peak single-stream decode · 174.9 tok/s peak aggregate at five streams on one GB10.** The [measured 1–5 stream curve](docs/BENCHMARKS.md#measured-peak-rates) uses one copy-heavy workload throughout.
+**74.1 tok/s peak single-stream decode · 212.2 tok/s peak aggregate at eight streams on one GB10.** The [measured 1–8 stream curve](docs/BENCHMARKS.md#measured-peak-rates) uses one copy-heavy workload and one decode-window metric throughout.
 
-![License](https://img.shields.io/badge/license-mixed%20Apache%202.0%20%7C%20noncommercial-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64) ![Single-stream peak](https://img.shields.io/badge/single%20peak-74.1%20tok%2Fs-244d64) ![Aggregate peak](https://img.shields.io/badge/5--stream%20peak-174.9%20tok%2Fs-244d64)
+![License](https://img.shields.io/badge/license-mixed%20Apache%202.0%20%7C%20noncommercial-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64) ![Single-stream peak](https://img.shields.io/badge/single%20peak-74.1%20tok%2Fs-244d64) ![Aggregate peak](https://img.shields.io/badge/8--stream%20peak-212.2%20tok%2Fs-244d64)
 
 The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 builder and staged iter6c-to-iter6d image build sources. [Build instructions](docs/BUILD.md) cover the public downloads, image, checkpoint and launch steps; [results](docs/results/) contain the measurement tables.
 
@@ -21,7 +21,10 @@ The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 
 | Peak aggregate decode, 2 streams | **110.0 tok/s** | Same copy-heavy workload; three rounds |
 | Peak aggregate decode, 3 streams | **132.9 tok/s** | Same copy-heavy workload; three rounds |
 | Peak aggregate decode, 4 streams | **155.5 tok/s** | Same copy-heavy workload; three rounds |
-| Peak aggregate decode, 5 streams | **174.9 tok/s** | Same copy-heavy workload; three rounds |
+| Peak aggregate decode, 5 streams | **175.8 tok/s** | Same copy-heavy workload; three rounds in the extension session |
+| Peak aggregate decode, 6 streams | **191.5 tok/s** | Same copy-heavy workload; three rounds |
+| Peak aggregate decode, 7 streams | **205.8 tok/s** | Same copy-heavy workload; three rounds |
+| Peak aggregate decode, 8 streams | **212.2 tok/s** | Same copy-heavy workload; three rounds |
 | Decode step | **52.33 ms** | v16b candidate window |
 | Warm coding / cold 64k time to first token | **0.57 s / 27.0 s** | Cached coding prompt / cold long-context prompt |
 | KV pool / configured context | **16 GB / 262,144 tokens** | Promoted launch settings |
@@ -29,7 +32,27 @@ The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 
 | Fixed-suite evaluation | **459/492** and **458/492** | Seeds 20260910 and 20260908 |
 | Long generation | **21/24** and **22/24** | Two readings |
 
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/throughput-dark.svg"><img src="docs/assets/throughput-light.svg" alt="Measured peak copy-heavy decode throughput at one through five streams" width="900"></picture></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/throughput-dark.svg"><img src="docs/assets/throughput-light.svg" alt="Measured peak copy-heavy decode throughput at one through eight streams" width="900"></picture></p>
+
+## Why this recipe
+
+- **Traceable throughput:** Both stream sessions publish all 27 per-round records, including timelines and speculative-decoding telemetry, alongside the [runner](recipe/benchmarks/bench_copy_streams.py) and [summary CSV](docs/results/throughput.csv).
+- **One measured curve:** The same copy-heavy workload and all-decoding-window metric produce **74.1 / 110.0 / 132.9 / 155.5 / 175.8 / 191.5 / 205.8 / 212.2 tok/s peak** at 1–8 streams. The five-stream repeat measured **175.8 tok/s**, following **174.9 tok/s** in the first session.
+- **Measured step-time gain:** Interleaved same-night windows put the upstream baseline at **68.3 ms** and v16b at **52.3 ms** per decode step, a **23%** reduction.
+- **Steady speculative acceptance:** The 27 rounds measured **3.65–3.94 tokens per step** across 1–8 streams, while aggregate throughput rose with batching.
+- **Quality record:** Two seeds of the 492-item suite scored **93.1% / 93.3%**; a teacher-forced control measured **−0.06 percentage points** against its pre-registered **0.15-point** band.
+- **Public build path:** Pinned checkpoint downloads, a digest-checked image build, the T80 dense-MTP drafter builder and CPU checks are published in [BUILD.md](docs/BUILD.md) and the [recipe](recipe/).
+
+## How it compares
+
+Each row reports the recipe's own GB10 workload and statistic, checked at its linked source on 2026-09-27. All rates are decode tok/s.
+
+| Recipe | Workload class and method | Statistic | Streams | Tok/s | Checked | Source and verification |
+|---|---|---|---:|---:|---|---|
+| DGX UltraFast v16b | Copy-heavy, low effort; shared prefix, all-decoding window | Peak of 3 rounds | 1 | 74.1 | 2026-09-27 | [Per-round record](docs/results/copy-streams-rounds.csv), source checked |
+| gitcommit90 NVFP4 | Structured output; own serving benchmark | Reported decode rate | 1 | 60.2 | 2026-09-27 | [Official measured results](https://github.com/gitcommit90/qwen38-flash-next-nvfp4-one-spark#measured-results), source checked |
+| myllmbox hibrid48 v4 | Spec-friendly pasture prompt; ten-second engine windows, three-run rung | Reported peak | 8 | 227 | 2026-09-27 | [Official v4 ladder](https://github.com/myllmbox/qwen38-flash-next-recipe#measured-performance-this-exact-kit-one-dgx-spark-k5-vmcompaction_proactiveness0), source checked |
+| DGX UltraFast v16b | Copy-heavy, low effort; shared prefix, all-decoding window | Peak of 3 rounds | 8 | 212.2 | 2026-09-27 | [Extension rounds](docs/results/copy-streams-extension-rounds.csv), source checked |
 
 ## Requirements
 
@@ -83,7 +106,7 @@ The v16b image adds a low-latency GEMM, verify-path top-k kernel and draft-block
 
 ## Benchmarks and quality
 
-The copy-heavy stream benchmark ran three rounds at each count with a shared 9,600-token cached prefix and low reasoning effort. Its [runner](recipe/benchmarks/bench_copy_streams.py) and [per-round data](docs/results/copy-streams-rounds.csv) are included. The separate agent-shaped benchmark used six coding tasks, three repeats and thinking enabled. The fixed 492-item suite covers code, math, knowledge, instruction following, tool calls and long-context needles. [Benchmark method](docs/BENCHMARKS.md) · [Evaluation results](docs/EVALS.md).
+The copy-heavy stream benchmark ran three rounds at each count with a shared 9,600-token cached prefix and low reasoning effort. Its [runner](recipe/benchmarks/bench_copy_streams.py) and [per-round data from both sessions](docs/BENCHMARKS.md#measured-peak-rates) are included. The separate agent-shaped benchmark used six coding tasks, three repeats and thinking enabled. The fixed 492-item suite covers code, math, knowledge, instruction following, tool calls and long-context needles. [Benchmark method](docs/BENCHMARKS.md) · [Evaluation results](docs/EVALS.md).
 
 ## Credits and licenses
 

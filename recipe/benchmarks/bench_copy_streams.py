@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
-"""Measure copy-heavy decode throughput at one through five concurrent streams.
+"""Measure copy-heavy decode throughput at one through eight concurrent streams.
 
 Three rounds run at each stream count, after one warmup. A generated public
 copy workload is bundled below; --prompts accepts a JSON file with system,
 tools and copy tasks. The metric is completion tokens within the all-decoding
 window (latest first token to earliest finish), divided by that window.
 The runner also records per-stream rates, time to first token, acceptance
-deltas and ordinary total-tokens-per-wall-time for each round.
+deltas, scheduler running/waiting peaks and ordinary total-tokens-per-wall-time
+for each round. It checks host available memory before each stream count.
 """
 
 from __future__ import annotations
@@ -151,6 +152,31 @@ def gauges(metrics: dict) -> dict:
             "request_success_total": metric_value(metrics, REQ_SUCCESS)}
 
 
+def monitor_gauges(base: str, stop: threading.Event, samples: list) -> None:
+    while not stop.is_set():
+        reading = gauges(fetch_metrics(base))
+        samples.append((time.time(), reading["running"], reading["waiting"]))
+        stop.wait(1.0)
+
+
+def gauge_peaks(samples: list, start: float, end: float) -> dict:
+    readings = [(running, waiting) for stamp, running, waiting in samples
+                if start <= stamp <= end]
+    return {
+        "running_peak": max((item[0] for item in readings), default=None),
+        "waiting_peak": max((item[1] for item in readings), default=None),
+        "samples": len(readings),
+    }
+
+
+def mem_available_gib() -> float:
+    with open("/proc/meminfo", encoding="utf-8") as file:
+        for line in file:
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / (1024 * 1024)
+    raise RuntimeError("MemAvailable missing from /proc/meminfo")
+
+
 # --------------------------------------------------------------------------
 # one streaming request
 # --------------------------------------------------------------------------
@@ -263,7 +289,7 @@ def chars_at(timeline, t: float) -> float:
     return prev_c
 
 
-def run_round(cfg, n: int, round_idx: int, tasks: list) -> dict:
+def run_round(cfg, n: int, round_idx: int, tasks: list, monitor_samples: list) -> dict:
     """One round: n simultaneous streams, snapshot /metrics around it."""
     picked = [tasks[(round_idx + i) % len(tasks)] for i in range(n)]
 
@@ -349,6 +375,7 @@ def run_round(cfg, n: int, round_idx: int, tasks: list) -> dict:
         "per_stream_tok_s": [s.get("decode_tok_s") for s in ok],
         "samples": samples,
         "spec": spec,
+        "gauges_peak": gauge_peaks(monitor_samples, utc_start, utc_end),
         "foreign": bool(spec.get("request_success_delta", 0) > n),
         "n_failed": len(samples) - len(ok),
         "gauges_before": gauges(before),
@@ -382,13 +409,19 @@ def main(argv=None) -> int:
     ap.add_argument("--prompts", type=Path,
                     help="optional JSON workload with system, tools and three copy tasks")
     ap.add_argument("--max-tokens", type=int, default=1500)
+    ap.add_argument("--streams", type=int, nargs="+", default=list(range(1, 9)),
+                    help="stream counts to measure, each from 1 through 8")
     ap.add_argument("--effort", default="low")
     ap.add_argument("--request-timeout", type=float, default=900.0)
     ap.add_argument("--settle-s", type=float, default=5.0)
+    ap.add_argument("--min-mem-gib", type=float, default=12.0,
+                    help="stop before a stream count if host MemAvailable is below this")
     ap.add_argument("--out", type=Path, default=Path("copy-streams.json"))
     ap.add_argument("--skip-idle-check", action="store_true",
                     help="resume path: skip the 120 s pre-test gate")
     cfg = ap.parse_args(argv)
+    if not cfg.streams or any(n < 1 or n > 8 for n in cfg.streams) or len(set(cfg.streams)) != len(cfg.streams):
+        ap.error("--streams requires distinct counts from 1 through 8")
 
     if cfg.prompts:
         with cfg.prompts.open(encoding="utf-8") as fh:
@@ -430,9 +463,19 @@ def main(argv=None) -> int:
     print("warmup: done", flush=True)
 
     rounds = []
-    for n in (1, 2, 3, 4, 5):
+    monitor_samples = []
+    monitor_stop = threading.Event()
+    monitor_thread = threading.Thread(target=monitor_gauges,
+                                      args=(cfg.base, monitor_stop, monitor_samples), daemon=True)
+    monitor_thread.start()
+    for n in cfg.streams:
+        available = mem_available_gib()
+        print("N=%d MemAvailable-before %.2f GiB" % (n, available), flush=True)
+        if available < cfg.min_mem_gib:
+            print("STOP: MemAvailable %.2f GiB below %.2f GiB" % (available, cfg.min_mem_gib), flush=True)
+            break
         for r in (0, 1, 2):
-            rec = run_round(cfg, n, r, tasks)
+            rec = run_round(cfg, n, r, tasks, monitor_samples)
             if rec["foreign"]:
                 # protocol-mandated redo: discard, fresh idle check, redo once
                 print("round N=%d r=%d: FOREIGN traffic (success delta %s > %d) -- discard + redo"
@@ -455,7 +498,7 @@ def main(argv=None) -> int:
                     print("still busy after foreign round -- stopping.", flush=True)
                     rounds[-1]["redo_aborted_busy"] = True
                     break
-                rec = run_round(cfg, n, r, tasks)
+                rec = run_round(cfg, n, r, tasks, monitor_samples)
                 rec["redo_of_foreign"] = True
             rounds.append(rec)
             w = rec["window"]
@@ -467,6 +510,10 @@ def main(argv=None) -> int:
                   flush=True)
             with cfg.out.with_suffix(cfg.out.suffix + ".partial").open("w", encoding="utf-8", newline="\n") as fh:
                 json.dump({"rounds": rounds}, fh, indent=1)
+        print("N=%d MemAvailable-after %.2f GiB" % (n, mem_available_gib()), flush=True)
+
+    monitor_stop.set()
+    monitor_thread.join(timeout=2.0)
 
     utc_test_end = time.time()
     print("TEST-UTC-END %s (%.3f)" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(utc_test_end)),
@@ -474,13 +521,17 @@ def main(argv=None) -> int:
 
     # summary per N over kept rounds
     summary = {}
-    for n in (1, 2, 3, 4, 5):
+    for n in cfg.streams:
         kept = [r for r in rounds if r["n"] == n and not r.get("discarded_foreign")]
         agg = [r["window"]["tok_s"] for r in kept if r["window"]["tok_s"]]
         simple = [r["simple"]["tok_s"] for r in kept if r["simple"]["tok_s"]]
         ps = [v for r in kept for v in (r["per_stream_tok_s"] or []) if v]
         ttfts = [s["ttft_s"] for r in kept for s in r["samples"] if s.get("ok") and s.get("ttft_s") is not None]
         tps = [r["spec"]["tokens_per_step"] for r in kept if r["spec"].get("tokens_per_step")]
+        running_peaks = [r["gauges_peak"]["running_peak"] for r in kept
+                         if r["gauges_peak"]["running_peak"] is not None]
+        waiting_peaks = [r["gauges_peak"]["waiting_peak"] for r in kept
+                         if r["gauges_peak"]["waiting_peak"] is not None]
         summary[str(n)] = {
             "rounds_kept": len(kept),
             "window_tok_s": {"peak": max(agg) if agg else None,
@@ -492,10 +543,20 @@ def main(argv=None) -> int:
             "tokens_per_step": {"median": statistics.median(tps) if tps else None},
             "ttft_s": {"median": statistics.median(ttfts) if ttfts else None,
                        "max": max(ttfts) if ttfts else None},
+            "running_peak": max(running_peaks) if running_peaks else None,
+            "waiting_peak": max(waiting_peaks) if waiting_peaks else None,
         }
 
+    level_off = None
+    for previous, current in zip(cfg.streams, cfg.streams[1:]):
+        prior_peak = summary[str(previous)]["window_tok_s"]["peak"]
+        current_peak = summary[str(current)]["window_tok_s"]["peak"]
+        if prior_peak and current_peak and (current_peak - prior_peak) / prior_peak < 0.05:
+            level_off = current
+            break
+
     out = {
-        "label": "copy-heavy decode; N=1..5 x 3 rounds",
+        "label": "copy-heavy decode; three rounds per configured stream count",
         "model": cfg.model,
         "effort": cfg.effort,
         "max_tokens": cfg.max_tokens,
@@ -504,11 +565,12 @@ def main(argv=None) -> int:
         "utc_test_end": utc_test_end,
         "rounds": rounds,
         "summary": summary,
+        "level_off_n": level_off,
     }
     with cfg.out.open("w", encoding="utf-8", newline="\n") as fh:
         json.dump(out, fh, indent=1)
         fh.write("\n")
-    for n in (1, 2, 3, 4, 5):
+    for n in cfg.streams:
         s = summary[str(n)]
         print("N=%d peak=%.2f median=%.2f per-stream=%.2f tps=%s ttft=%s"
               % (n, s["window_tok_s"]["peak"] or 0, s["window_tok_s"]["median"] or 0,
