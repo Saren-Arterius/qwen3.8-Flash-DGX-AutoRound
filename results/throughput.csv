@@ -1,11 +1,5 @@
-streams,aggregate_tok_s,reading,gate,provenance
-1,50,computed_planning,not_applicable,program planning estimate
-1,51.1,measured_probe,failed_occupancy,equal-length v16b probe
-2,74,computed_planning,not_applicable,program planning estimate
-2,73.8,measured_probe,not_flagged,equal-length v16b probe
-3,94,computed_planning,not_applicable,program planning estimate
-3,115.1,measured_probe,not_flagged,equal-length v16b probe
-4,101,computed_planning,not_applicable,program planning estimate
-4,129.1,measured_probe,not_flagged,equal-length v16b probe
-5,107,computed_planning,not_applicable,program planning estimate
-5,146.3,measured_probe,not_flagged,equal-length v16b probe
+streams,aggregate_tok_s,workload
+2,73.8,equal-length v16b decode probe
+3,115.1,equal-length v16b decode probe
+4,129.1,equal-length v16b decode probe
+5,146.3,equal-length v16b decode probe

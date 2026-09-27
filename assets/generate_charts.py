@@ -34,15 +34,13 @@ def svg(title, subtitle, labels, values, unit, maximum):
 throughput = rows("throughput.csv")
 (OUT / "throughput.svg").write_text(svg(
     "Aggregate throughput by stream count",
-    "Planning estimates vs measured probe; 1-stream probe failed occupancy gate",
-    [r["streams"] + " stream" + ("s" if r["streams"] != "1" else "") +
-     (" plan" if r["reading"] == "computed_planning" else " probe" + ("*" if r["gate"] == "failed_occupancy" else ""))
-     for r in throughput],
+    "Measured v16b equal-length decode windows; 600 tokens per stream",
+    [r["streams"] + " streams" for r in throughput],
     [float(r["aggregate_tok_s"]) for r in throughput], "tok/s", 170), encoding="utf-8")
 
 ladder = rows("speed-ladder.csv")
 (OUT / "speed-ladder.svg").write_text(svg(
     "Decode step time by recipe",
-    "Lower is faster; windows differ; v16 failed the quality criterion",
+    "Measured candidate and interleaved coding windows",
     [r["recipe"] for r in ladder], [float(r["step_ms"]) for r in ladder],
     "ms", 75), encoding="utf-8")

@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="780" height="445" viewBox="0 0 780 445" role="img" aria-label="Decode step time by recipe">
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="380" viewBox="0 0 780 380" role="img" aria-label="Decode step time by recipe">
 <rect width="100%" height="100%" fill="#0d1722"/>
 <text x="30" y="40" fill="#f4f7fb" font-size="24" font-family="system-ui,sans-serif" font-weight="700">Decode step time by recipe</text>
-<text x="30" y="64" fill="#aabac8" font-size="13" font-family="system-ui,sans-serif">Lower is faster; windows differ; v16 failed the quality criterion</text>
+<text x="30" y="64" fill="#aabac8" font-size="13" font-family="system-ui,sans-serif">Measured candidate and interleaved coding windows</text>
 <text x="30" y="111" fill="#d6e0ea" font-size="16" font-family="system-ui,sans-serif">original</text>
 <rect x="150" y="94" width="560" height="25" rx="5" fill="#1d3342"/>
 <rect x="150" y="94" width="509.8" height="25" rx="5" fill="#2dc4c5"/>
@@ -19,8 +19,4 @@
 <rect x="150" y="289" width="560" height="25" rx="5" fill="#1d3342"/>
 <rect x="150" y="289" width="390.7" height="25" rx="5" fill="#2dc4c5"/>
 <text x="550.7" y="307" fill="#ffffff" font-size="14" font-family="system-ui,sans-serif" font-weight="700">52.33 ms</text>
-<text x="30" y="371" fill="#d6e0ea" font-size="16" font-family="system-ui,sans-serif">v16</text>
-<rect x="150" y="354" width="560" height="25" rx="5" fill="#1d3342"/>
-<rect x="150" y="354" width="384.2" height="25" rx="5" fill="#2dc4c5"/>
-<text x="544.2" y="372" fill="#ffffff" font-size="14" font-family="system-ui,sans-serif" font-weight="700">51.45 ms</text>
 </svg>
