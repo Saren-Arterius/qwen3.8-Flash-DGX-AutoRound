@@ -16,6 +16,8 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check shellcheck-py==0.11.0.1 numpy==2.2.6
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
       - name: Bash syntax and ShellCheck
         run: |
           find . -path './.git' -prune -o -path './.venv' -prune -o -name '*.sh' -type f -print0 | xargs -0 -r -n1 bash -n
