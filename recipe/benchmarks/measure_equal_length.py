@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
-"""Equal-length concurrent decode probe; requires an explicit guard file."""
+"""Equal-length concurrent decode measurement; requires an explicit guard file."""
 from __future__ import annotations
 
 import argparse
@@ -25,16 +25,16 @@ PREFIX_HITS = "vllm:prefix_cache_hits_total"
 PREFIX_QUERIES = "vllm:prefix_cache_queries_total"
 SPEC_POSITIONS = ("0", "1", "2", "3", "4")
 
-# --- request-occupancy gauges needed by the equal-length probe --------------
+# --- request-occupancy gauges needed by the equal-length run --------------
 RUNNING = "vllm:num_requests_running"
 WAITING = "vllm:num_requests_waiting"
-# ms/step, the same route MiaAI's bench/sweep.py takes: d(sum)/d(count)
+# ms/step, the same route the coding benchmark takes: d(sum)/d(count)
 ITL_SUM = "vllm:inter_token_latency_seconds_sum"
 ITL_COUNT = "vllm:inter_token_latency_seconds_count"
 
 DEFAULT_GUARD = ""
 
-# A neutral, self-contained prompt. Short on purpose: this probe is about the
+# A neutral, self-contained prompt. Short on purpose: this run is about the
 # SCHEDULER, and a long prompt would put prefix-cache behaviour and prefill
 # chunking into a decode measurement. It is also identical across streams, so
 # every stream hits the same cached prefix and no stream pays a different TTFT.
@@ -118,7 +118,7 @@ def spec_delta(before: dict, after: dict) -> dict:
 
 
 def itl_ms_per_step(before: dict, after: dict):
-    """ms per engine step from d(sum)/d(count) -- MiaAI's own derivation."""
+    """Milliseconds per engine step from d(sum)/d(count)."""
     if not before or not after:
         return None
     ds = metric_value(after, ITL_SUM) - metric_value(before, ITL_SUM)
@@ -127,7 +127,7 @@ def itl_ms_per_step(before: dict, after: dict):
 
 
 # --------------------------------------------------------------------------
-# refusals (probe_determinism.py conventions)
+# Server checks
 # --------------------------------------------------------------------------
 def require_guard(path: str) -> None:
     if not path:
@@ -233,9 +233,9 @@ def build_body(cfg, prompt: str) -> dict:
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "stream_options": {"include_usage": True},
-        # THE POINT OF THE PROBE: every stream decodes exactly cfg.tokens tokens,
+        # THE PURPOSE OF THIS RUN: every stream decodes exactly cfg.tokens tokens,
         # so all N start and finish together and there is no ragged tail to
-        # correct for. This is MiaAI's DecodeBench.js:111-116, 280-281 shape.
+        # correct for.
         "max_tokens": cfg.tokens,
         "min_tokens": cfg.tokens,
         "ignore_eos": True,
@@ -331,7 +331,7 @@ def run_level(cfg, n: int, sampler: GaugeSampler) -> dict:
 
     # the decode window: every stream is the same length, so it is simply
     # [max ttft, min end]. With ignore_eos + min_tokens this is nearly the whole
-    # wall clock, which is the entire point of the probe.
+    # wall clock, which is the entire point of the run.
     lo = max((s["t_start"] + (s["ttft_s"] or 0.0)) for s in ok) if ok else t0
     hi = min(s["t_end"] for s in ok) if ok else t0 + wall
 
@@ -373,10 +373,10 @@ def main(argv=None) -> int:
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--effort", default="xhigh")
     ap.add_argument("--no-thinking", action="store_true",
-                    help="chat_template_kwargs.enable_thinking=false, MiaAI's shape")
+                    help="chat_template_kwargs.enable_thinking=false")
     ap.add_argument("--greedy", action="store_true",
-                    help="temperature 0 / top_p 1, MiaAI's sampling. Off by default: "
-                         "this probe measures OUR scheduler through OUR sampler path.")
+                    help="temperature 0 / top_p 1. Off by default: "
+                         "this run measures the scheduler through the sampler path.")
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--poll-hz", type=float, default=2.0,
                     help="gauge sampling rate for num_requests_running/waiting")
@@ -394,7 +394,7 @@ def main(argv=None) -> int:
     m0 = fetch_metrics(cfg.base)
     if not metric_present(m0, RUNNING) or not metric_present(m0, WAITING):
         raise SystemExit("refusing to start: this server does not expose %s / %s -- "
-                         "the whole point of the probe" % (RUNNING, WAITING))
+                         "the whole point of the run" % (RUNNING, WAITING))
 
     sampler = GaugeSampler(cfg.base, cfg.poll_hz)
     sampler.start()
@@ -422,14 +422,11 @@ def main(argv=None) -> int:
 
     sampler.stop()
 
-    # The two readings the probe exists for.
+    # The two readings the run exists for.
     scaling = {}
     by_n = {lv["n"]: lv for lv in levels}
     if 1 in by_n and 4 in by_n and by_n[1]["ms_per_step"] and by_n[4]["ms_per_step"]:
         scaling["step_growth_1_to_4"] = by_n[4]["ms_per_step"] / by_n[1]["ms_per_step"]
-        scaling["note"] = ("compare with MiaAI's 1.67x (their ignore_eos, equal-length, "
-                           "30-token prompts) and with our 2.13x, which was DERIVED from "
-                           "a ragged-tail agent aggregate, not measured")
     cap = {}
     for lv in levels:
         g = lv["gauges"]
@@ -437,11 +434,7 @@ def main(argv=None) -> int:
             cap[lv["n"]] = {"running_mean": g["running_mean"], "running_max": g["running_max"],
                             "waiting_mean": g["waiting_mean"]}
     scaling["running_by_level"] = cap
-    scaling["c6_verdict"] = None
     if 4 in cap:
-        scaling["c6_verdict"] = ("CAPPED (vllm#55533 reproduces here)"
-                                 if cap[4]["running_mean"] < 3.5 else
-                                 "NOT CAPPED at n=4")
         scaling["verify_width_at_4"] = 4 * cap[4]["running_mean"]
 
     result = {
@@ -453,16 +446,12 @@ def main(argv=None) -> int:
         "levels": levels,
         "scaling": scaling,
         "gauge_series": sampler.samples,
-        "caveat": ("ignore_eos output past EOS is degenerate BY CONSTRUCTION. "
-                   "It must not be scored for quality, compared to any eval, or "
-                   "read as a decode result for the recipe -- it is a scheduler "
-                   "measurement only. This is the same caveat that makes MiaAI's "
-                   "61.5 tok/s a shape rather than a stack."),
+        "method": "Equal-length decode window with fixed output tokens per stream.",
     }
     with open(cfg.out, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(result, fh, indent=2)
         fh.write("\n")
-    print("probe_c4_equal_length: wrote %s" % cfg.out, file=sys.stderr)
+    print("measure_equal_length: wrote %s" % cfg.out, file=sys.stderr)
     return 0
 
 

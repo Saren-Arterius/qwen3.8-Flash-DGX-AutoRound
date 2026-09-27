@@ -37,16 +37,16 @@
 set -euo pipefail
 CKPT="${1:?usage: prepare.sh <checkpoint-dir> <ple-table-dir>}"
 TABLE="${2:?usage: prepare.sh <checkpoint-dir> <ple-table-dir>}"
-cd "$(dirname "$0")"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Local release deviation: use the public, ungated model ID documented by
 # the upstream README; its snapshot prepare.sh named an inaccessible RTN ID.
 hf download Intel/Qwen3.8-Flash-Next-W4A16-AutoRound --local-dir "$CKPT"
 
-python3 tools/quantize_lm_head_int8.py "$CKPT"
-python3 tools/fp8_convert.py "$CKPT"
-python3 tools/strip_ngram_index.py "$CKPT"
-bash tools/fetch-ple-table-fp8.sh "$TABLE"
+python3 "$script_dir/tools/quantize_lm_head_int8.py" "$CKPT"
+python3 "$script_dir/tools/fp8_convert.py" "$CKPT"
+python3 "$script_dir/tools/strip_ngram_index.py" "$CKPT"
+bash "$script_dir/tools/fetch-ple-table-fp8.sh" "$TABLE"
 
 python3 - "$CKPT" <<'EOF'
 import json, shutil, sys

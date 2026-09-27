@@ -12,7 +12,7 @@ import subprocess
 import zlib
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 PATTERNS = [
     ("POSIX home", r"/h[o]me/[A-Za-z0-9._-]+"),
     ("Windows home", r"(?:[A-Za-z]:\\|/)Users[/\\][^/\\\s]+"),
@@ -26,7 +26,8 @@ PATTERNS = [
 ]
 RX = [(label, re.compile(pattern, re.I)) for label, pattern in PATTERNS]
 IPV4 = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
-ALLOWED_BIND = {"scripts/serve-intel-ar.sh", "config/v16b/serve.sh"}
+ALLOWED_BIND = {"scripts/serve-intel-ar.sh", "config/v16b/serve.sh",
+                "recipe/scripts/serve-intel-ar.sh", "recipe/config/v16b/serve.sh"}
 WILDCARD_BIND = ".".join(("0", "0", "0", "0"))
 SHELLCHECK_VERSION = ".".join(("0", "11", "0", "1"))
 PNG_CRITICAL = {b"IHDR", b"IDAT", b"IEND"}

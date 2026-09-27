@@ -64,7 +64,7 @@ PC_ARG=--no-enable-prefix-caching
 
 # Never-evict pin: PIN_PROMPT="some exact substring of your system prompt"
 # keeps that prompt's KV blocks resident across other traffic (needs
-# PREFIX_CACHE=1). See docs/OPTIMIZATIONS.md.
+# PREFIX_CACHE=1). See docs/CONFIGURATION.md.
 PIN_PROMPT="${PIN_PROMPT:-}"
 PIN_ARG=()
 if [ -n "$PIN_PROMPT" ] && [ "${PREFIX_CACHE:-0}" = 1 ]; then
@@ -77,7 +77,7 @@ fi
 # local: pre-adoption container environment exactly (vLLM's own built-in
 # local: default applies inside the container) rather than pinning a value
 # local: here. PLE_STATS_SEC in particular is a diagnostics cadence and is
-# local: intentionally left unset by run-gx10.sh.
+# local: intentionally left unset by the promoted launcher.
 PLE_ARGS=()
 if [ -n "${PLE_FAST_ROWS:-}" ]; then PLE_ARGS+=(-e "VLLM_PLE_MMAP_FAST_ROWS=$PLE_FAST_ROWS"); fi
 if [ -n "${PLE_CHUNK:-}" ];     then PLE_ARGS+=(-e "VLLM_PLE_MMAP_CHUNK=$PLE_CHUNK");         fi

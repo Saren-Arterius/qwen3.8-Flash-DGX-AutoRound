@@ -24,12 +24,12 @@ done < <(sed -nE 's/^COPY src\/([^ ]+) .*/\1/p' "$here/Dockerfile.iter6c" "$here
 
 if ((${#missing[@]})); then
   printf 'Missing iter6c source input(s):\n' >&2
-  printf '  build/image/src/%s\n' "${missing[@]}" >&2
+  printf '  recipe/build/image/src/%s\n' "${missing[@]}" >&2
   echo 'The measured iter6d image cannot be rebuilt from this release yet.' >&2
   exit 66
 fi
 for name in test_draft_vocab_cpu.py test_block_drop_cpu.py test_iter6_patches_image.py blockdrop_base_sha256.json; do
-  [ -f "$here/tests/$name" ] || { echo "missing image check: build/image/tests/$name" >&2; exit 66; }
+  [ -f "$here/tests/$name" ] || { echo "missing image check: recipe/build/image/tests/$name" >&2; exit 66; }
 done
 
 # Pinned release inputs: ten exact clone copies and one comment-sanitized copy.

@@ -1,0 +1,32 @@
+<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" role="img" aria-label="Peak decode throughput">
+<style>text{font-family:Inter, Manrope, "Space Grotesk", system-ui, Arial, sans-serif}.accent{fill:#087f8c}.ink{fill:#182b38}.muted{fill:#435b68}@media(prefers-color-scheme:dark){.accent{fill:#68d9e0}.ink{fill:#e8f0f4}.muted{fill:#a9bbc5}}</style>
+<text x="60" y="49" class="readable ink" font-size="27" font-weight="750">Peak decode throughput</text>
+<text x="60" y="78" class="readable muted" font-size="15">Measured v16b decode · one GB10 · tok/s</text>
+<line x1="105" y1="366.0" x2="827" y2="366.0" stroke="#82939b" opacity=".36"/>
+<text x="87" y="371.0" text-anchor="end" class="readable muted" font-size="14">0</text>
+<line x1="105" y1="291.3" x2="827" y2="291.3" stroke="#82939b" opacity=".36"/>
+<text x="87" y="296.3" text-anchor="end" class="readable muted" font-size="14">50</text>
+<line x1="105" y1="216.6" x2="827" y2="216.6" stroke="#82939b" opacity=".36"/>
+<text x="87" y="221.6" text-anchor="end" class="readable muted" font-size="14">100</text>
+<line x1="105" y1="141.9" x2="827" y2="141.9" stroke="#82939b" opacity=".36"/>
+<text x="87" y="146.9" text-anchor="end" class="readable muted" font-size="14">150</text>
+<polyline points="105.0,256.7 285.5,255.8 466.0,194.1 646.5,173.2 827.0,147.5" fill="none" stroke="#087f8c" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="105.0" cy="256.7" r="8" fill="#087f8c" stroke="white" stroke-width="2"/>
+<text x="105.0" y="237.7" text-anchor="middle" class="readable accent" font-size="19" font-weight="750">73.2</text>
+<text x="105.0" y="396" text-anchor="middle" class="readable ink" font-size="16" font-weight="650">1</text>
+<circle cx="285.5" cy="255.8" r="8" fill="#087f8c" stroke="white" stroke-width="2"/>
+<text x="285.5" y="236.8" text-anchor="middle" class="readable accent" font-size="19" font-weight="750">73.8</text>
+<text x="285.5" y="396" text-anchor="middle" class="readable ink" font-size="16" font-weight="650">2</text>
+<circle cx="466.0" cy="194.1" r="8" fill="#087f8c" stroke="white" stroke-width="2"/>
+<text x="466.0" y="175.1" text-anchor="middle" class="readable accent" font-size="19" font-weight="750">115.1</text>
+<text x="466.0" y="396" text-anchor="middle" class="readable ink" font-size="16" font-weight="650">3</text>
+<circle cx="646.5" cy="173.2" r="8" fill="#087f8c" stroke="white" stroke-width="2"/>
+<text x="646.5" y="154.2" text-anchor="middle" class="readable accent" font-size="19" font-weight="750">129.1</text>
+<text x="646.5" y="396" text-anchor="middle" class="readable ink" font-size="16" font-weight="650">4</text>
+<circle cx="827.0" cy="147.5" r="8" fill="#087f8c" stroke="white" stroke-width="2"/>
+<text x="827.0" y="128.5" text-anchor="middle" class="readable accent" font-size="19" font-weight="750">146.3</text>
+<text x="827.0" y="396" text-anchor="middle" class="readable ink" font-size="16" font-weight="650">5</text>
+<text x="466.0" y="443" text-anchor="middle" class="readable muted" font-size="15">Concurrent streams</text>
+<text x="23" y="256" transform="rotate(-90 23 256)" text-anchor="middle" class="readable muted" font-size="15">Peak tok/s</text>
+</svg>

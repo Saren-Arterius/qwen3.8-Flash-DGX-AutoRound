@@ -34,9 +34,9 @@ is downloaded separately and mounted read-only at launch.
 
 ## 2. Build the image
 
-`build/image/Dockerfile.iter6c` follows the supplied full measured parent
+`recipe/build/image/Dockerfile.iter6c` follows the supplied full measured parent
 Dockerfile, starting from the digest-pinned public vLLM preview image.
-`build/image/Dockerfile.iter6d` adds the block-retention and R7 logger
+`recipe/build/image/Dockerfile.iter6d` adds the block-retention and R7 logger
 patches. Their 53 and 5 active instruction lines, respectively, match the
 supplied Dockerfiles. All 18 Docker `COPY` source files are present. Eleven
 base-clone source files are checked by MD5 before the script pulls anything.
@@ -51,8 +51,8 @@ The byte-identical inputs include
 Both Dockerfiles and their vLLM-derived patches remain Apache-2.0.
 
 ```bash
-bash build/image/build.sh --print
-bash build/image/build.sh --run
+bash recipe/build/image/build.sh --print
+bash recipe/build/image/build.sh --run
 ```
 
 `--print` verifies the required source files and release hashes, then displays
@@ -90,8 +90,8 @@ the newly built iter6d image as its CPU helper. The source and destination must 
 siblings under the same `MODELS_ROOT` so unchanged shards can be hardlinked.
 
 ```bash
-bash build/model/build.sh --print
-bash build/model/build.sh --run
+bash recipe/build/model/build.sh --print
+bash recipe/build/model/build.sh --run
 ```
 
 The wrapper invokes `--tier drafter-dense --group-size 32`. Do not use only
@@ -101,7 +101,7 @@ converts nine bf16 drafter modules in `model_extra_tensors.safetensors`,
 retains target routing, verifies the resulting safetensors/index, and links
 the unchanged shards. The generated report is `dense-mtp-build-report.json`
 inside the output directory. The historical reference report is
-[reference-build-report.json](../build/model/reference-build-report.json).
+[reference-build-report.json](../recipe/build/model/reference-build-report.json).
 
 | Recorded T80 check | Reference value |
 |---|---:|
@@ -120,8 +120,8 @@ The wrapper checks the two pinned input hashes and the report invariants;
 With both builds complete:
 
 ```bash
-bash config/v16b/launch.sh --print
-bash config/v16b/launch.sh --run
+bash recipe/config/v16b/launch.sh --print
+bash recipe/config/v16b/launch.sh --run
 curl -fsS http://localhost:8000/v1/models
 curl -fsS http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \

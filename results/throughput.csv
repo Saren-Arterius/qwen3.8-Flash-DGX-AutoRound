@@ -1,5 +1,0 @@
-streams,aggregate_tok_s,workload
-2,73.8,equal-length v16b decode probe
-3,115.1,equal-length v16b decode probe
-4,129.1,equal-length v16b decode probe
-5,146.3,equal-length v16b decode probe

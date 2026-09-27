@@ -4,19 +4,20 @@ This repository contains code derived from:
 Saren-Arterius/qwen3.8-Flash-DGX-AutoRound
 https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound
 Copyright 2026 blazux. Licensed under Apache License, Version 2.0.
-The upstream-derived paths are Dockerfile, .dockerignore, prepare.sh, src/,
-tools/, scripts/, build/, benchmarks/decode_bench.py, and config/v16b/serve.sh and
-config/v16b/launch.sh. See LICENSE for the full per-path map.
+The upstream-derived paths are recipe/Dockerfile, recipe/.dockerignore, recipe/prepare.sh,
+recipe/src/, recipe/tools/, recipe/scripts/, recipe/build/,
+recipe/benchmarks/decode_bench.py, and recipe/config/v16b/serve.sh and
+recipe/config/v16b/launch.sh. See ../LICENSE for the full per-path map.
 
 The source snapshot includes patches to vLLM files and ports of public vLLM
 changes. Those derivative patches remain under Apache-2.0. The vLLM project
 is credited at https://github.com/vllm-project/vllm .
 
-The build/image files carry the iteration-6 patch lineage; build/model
+The recipe/build/image files carry the iteration-6 patch lineage; recipe/build/model
 contains the dense-MTP builder and tests. Code derived from the upstream
 recipe and vLLM retains Apache-2.0. The reference build report is a factual
 record and has its own CC BY-NC 4.0 sidecar.
-Build/image/src files retain Apache-2.0 through inline headers or `.license`
+The recipe/build/image/src files retain Apache-2.0 through inline headers or `.license`
 sidecars. Some copies have publication-only comment and docstring edits;
 the image build pins their sanitized release bytes, and their executable
 Python AST was compared with the staged originals.

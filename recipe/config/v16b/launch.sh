@@ -13,7 +13,7 @@ image="$(tr -d '[:space:]' < image)"
 case "$image" in *:latest|latest|*:|'') echo 'a fixed image tag is required' >&2; exit 66 ;; *:*) ;; *) exit 66 ;; esac
 vocab="${HOME}/.cache/qwen38-v16b/draft-vocab-ids-K65536.txt"
 if [ "$mode" = --run ]; then
-  docker image inspect "$image" >/dev/null || { echo 'the measured image is unavailable; see docs/BUILD.md' >&2; exit 66; }
+  docker image inspect "$image" >/dev/null || { echo 'the measured image is unavailable; see repository docs/BUILD.md' >&2; exit 66; }
   mkdir -p "$(dirname "$vocab")"
   temp="$(mktemp "${vocab}.XXXXXX")"
   trap 'rm -f "$temp"' EXIT

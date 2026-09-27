@@ -2,17 +2,17 @@ Qwen3.8 Flash · DGX UltraFast — license map
 
 Required Notice: Copyright 2026 dime-online (https://github.com/dime-online)
 
-Upstream-derived code is licensed under Apache-2.0. This includes Dockerfile,
-prepare.sh, .dockerignore, src/, tools/, scripts/, build/, benchmarks/decode_bench.py,
-and config/v16b/serve.sh and launch.sh. See LICENSES/Apache-2.0.txt and NOTICE.
+Upstream-derived code is licensed under Apache-2.0. This includes recipe/Dockerfile, recipe/prepare.sh, recipe/.dockerignore, recipe/src/,
+recipe/tools/, recipe/scripts/, recipe/build/, recipe/benchmarks/decode_bench.py,
+and recipe/config/v16b/serve.sh and launch.sh. See docs/LICENSES/Apache-2.0.txt and docs/NOTICE.
 
 Original code, including chart generation, CI gates and the two program benchmark drivers,
 is licensed under PolyForm Noncommercial 1.0.0. See
-LICENSES/LicenseRef-PolyForm-Noncommercial-1.0.0.md.
+docs/LICENSES/LicenseRef-PolyForm-Noncommercial-1.0.0.md.
 
 Original documentation, data tables, configuration values, issue templates,
 and assets are licensed under Creative Commons Attribution-NonCommercial 4.0
-International (CC BY-NC 4.0). See LICENSES/CC-BY-NC-4.0.md and the
+International (CC BY-NC 4.0). See docs/LICENSES/CC-BY-NC-4.0.md and the
 canonical legal code at https://creativecommons.org/licenses/by-nc/4.0/legalcode.en .
 
 The noncommercial terms apply only to dime-online's original contributions.

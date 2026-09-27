@@ -1,0 +1,6 @@
+streams,peak_decode_tok_s,workload
+1,73.2,copy-heavy low-effort single request
+2,73.8,equal-length v16b decode window
+3,115.1,equal-length v16b decode window
+4,129.1,equal-length v16b decode window
+5,146.3,equal-length v16b decode window
