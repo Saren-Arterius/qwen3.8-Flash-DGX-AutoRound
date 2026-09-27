@@ -13,15 +13,15 @@
 <text x="656.0" y="407" text-anchor="middle" class="readable muted" font-size="14">60</text>
 <text x="158" y="159" text-anchor="end" class="readable ink" font-size="17" font-weight="650">Original</text>
 <rect x="180" y="138" width="541.7" height="28" rx="5" fill="#087f8c"/>
-<text x="735.7" y="159" class="readable accent" font-size="17" font-weight="750">68.276</text>
+<text x="735.7" y="159" class="readable accent" font-size="17" font-weight="750">68.3</text>
 <text x="158" y="221" text-anchor="end" class="readable ink" font-size="17" font-weight="650">v13</text>
 <rect x="180" y="200" width="532.9" height="28" rx="5" fill="#087f8c"/>
-<text x="726.9" y="221" class="readable accent" font-size="17" font-weight="750">67.167</text>
+<text x="726.9" y="221" class="readable accent" font-size="17" font-weight="750">67.2</text>
 <text x="158" y="283" text-anchor="end" class="readable ink" font-size="17" font-weight="650">v15</text>
 <rect x="180" y="262" width="441.5" height="28" rx="5" fill="#087f8c"/>
-<text x="635.5" y="283" class="readable accent" font-size="17" font-weight="750">55.65</text>
+<text x="635.5" y="283" class="readable accent" font-size="17" font-weight="750">55.7</text>
 <text x="158" y="345" text-anchor="end" class="readable ink" font-size="17" font-weight="650">v16b</text>
 <rect x="180" y="324" width="415.2" height="28" rx="5" fill="#087f8c"/>
-<text x="609.2" y="345" class="readable accent" font-size="17" font-weight="750">52.33</text>
+<text x="609.2" y="345" class="readable accent" font-size="17" font-weight="750">52.3</text>
 <text x="478" y="443" text-anchor="middle" class="readable muted" font-size="15">Milliseconds per decode step</text>
 </svg>
