@@ -1,0 +1,8 @@
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
+*.svg text eol=lf
+Dockerfile text eol=lf
+*.png binary
+*.gz binary

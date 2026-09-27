@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+FROM qwen38-flash-dgx:iter6c-20260909
+
+COPY src/patch_block_drop.py /tmp/patch_block_drop.py
+RUN python3 /tmp/patch_block_drop.py && rm /tmp/patch_block_drop.py
+
+COPY src/patch_r7_logger.py /tmp/patch_r7_logger.py
+RUN python3 /tmp/patch_r7_logger.py && rm /tmp/patch_r7_logger.py

@@ -1,0 +1,9 @@
+{
+  "system": "You are a coding assistant. Solve the user's request carefully and explain the result briefly.",
+  "tools": [],
+  "tasks": [
+    {"user": "Write a Python function that merges two sorted lists without using sort()."},
+    {"user": "Explain how to diagnose a slow database query using its execution plan."},
+    {"user": "Refactor a small file parser to report line numbers on malformed input."}
+  ]
+}

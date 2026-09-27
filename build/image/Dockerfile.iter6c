@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+FROM vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+
+ARG SP=/usr/local/lib/python3.12/dist-packages
+ARG PLE=${SP}/vllm/models/qwen3_8_flash_next/nvidia/ple_layer.py
+
+COPY src/vllm_ple_mmap.py ${SP}/vllm_ple_mmap.py
+
+RUN cp ${PLE} ${PLE}.orig \
+ && printf '\n\n# --- qwen38-flash-dgx: serve the PLE n-gram table from disk (VLLM_PLE_MMAP=1) ---\nfrom vllm_ple_mmap import apply as _ple_mmap_apply\n_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)\n' >> ${PLE} \
+ && python3 -c "import ast; ast.parse(open('${PLE}').read()); print('ple_layer.py patched OK')"
+
+ARG FLA_UTILS=${SP}/vllm/third_party/flash_linear_attention/ops/utils.py
+RUN sed -i 's|DEFAULT = 102400|DEFAULT = 101376  # spark-fla-shmem: GB10 99KiB = ADA, big GDN tiles fit|' ${FLA_UTILS} \
+ && grep -q "spark-fla-shmem" ${FLA_UTILS} && echo "fla shmem gate patched"
+
+ARG FLA_CDH=${SP}/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
+RUN sed -i 's|for num_warps in \[2, 4\]|for num_warps in [2]  # spark-fla-warps: fla#953 Blackwell tl.dot race|' ${FLA_CDH} \
+ && grep -q "spark-fla-warps" ${FLA_CDH} && echo "fla num_warps pinned"
+
+ARG GPTQ_PY=${SP}/vllm/model_executor/layers/quantization/auto_gptq.py
+COPY src/vllm_fp8_hybrid.py ${SP}/vllm_fp8_hybrid.py
+RUN printf '\n\n# --- qwen38-flash-dgx: int4+fp8 hybrid dispatch (VLLM_FP8_HYBRID=1) ---\nfrom vllm_fp8_hybrid import apply as _fp8_hybrid_apply\n_fp8_hybrid_apply()\n' >> ${GPTQ_PY} \
+ && python3 -c "import ast; ast.parse(open('${GPTQ_PY}').read()); print('auto_gptq.py patched OK')"
+
+COPY src/patch_never_evict.py /tmp/patch_never_evict.py
+RUN python3 /tmp/patch_never_evict.py && rm /tmp/patch_never_evict.py
+
+ARG MODEL_PY=${SP}/vllm/models/qwen3_8_flash_next/nvidia/model.py
+ARG MTP_PY=${SP}/vllm/models/qwen3_8_flash_next/nvidia/mtp.py
+RUN cp ${MODEL_PY} ${MODEL_PY}.orig && cp ${MTP_PY} ${MTP_PY}.orig \
+ && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n            prefix=maybe_prefix(prefix, "lm_head"),|' ${MODEL_PY} \
+ && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n                    prefix=maybe_prefix(prefix, "lm_head"),|' ${MTP_PY} \
+ && grep -c 'quant_config=vllm_config.quant_config' ${MODEL_PY} ${MTP_PY} \
+ && python3 -c "import ast; [ast.parse(open(p).read()) for p in ('${MODEL_PY}','${MTP_PY}')]; print('lm_head patched OK in model.py + mtp.py')"
+
+ARG MAMBA_UTILS=${SP}/vllm/v1/worker/mamba_utils.py
+RUN cp ${MAMBA_UTILS} ${MAMBA_UTILS}.orig
+COPY src/mamba_utils_guarded.py ${MAMBA_UTILS}
+RUN python3 -c "import ast; ast.parse(open('${MAMBA_UTILS}').read()); print('mamba_utils.py guarded OK')"
+
+COPY src/patch_hit_debug.py /tmp/patch_hit_debug.py
+RUN python3 /tmp/patch_hit_debug.py && rm /tmp/patch_hit_debug.py
+
+COPY src/patch_mamba_align_split.py /tmp/patch_mamba_align_split.py
+RUN python3 /tmp/patch_mamba_align_split.py && rm /tmp/patch_mamba_align_split.py
+
+COPY src/patch_step_profile.py /tmp/patch_step_profile.py
+RUN python3 /tmp/patch_step_profile.py && rm /tmp/patch_step_profile.py
+
+COPY src/draft_vocab_common.py ${SP}/draft_vocab_common.py
+COPY src/vllm_mtp_draft_vocab.py ${SP}/vllm_mtp_draft_vocab.py
+RUN printf '\n\n# --- qwen38-flash-dgx: reduced MTP draft vocabulary (VLLM_MTP_DRAFT_VOCAB) ---\nfrom vllm_mtp_draft_vocab import apply as _mtp_draft_vocab_apply\n_mtp_draft_vocab_apply(Qwen3_8FlashNextMTP)\n' >> ${MTP_PY} \
+ && python3 -c "import ast; ast.parse(open('${MTP_PY}').read()); print('mtp.py draft-vocab hook patched OK')"
+
+COPY src/patch_short_conv_async_h2d.py /tmp/patch_short_conv_async_h2d.py
+RUN python3 /tmp/patch_short_conv_async_h2d.py && rm /tmp/patch_short_conv_async_h2d.py
+
+COPY src/patch_measure_draft_mass.py /tmp/patch_measure_draft_mass.py
+RUN python3 /tmp/patch_measure_draft_mass.py && rm /tmp/patch_measure_draft_mass.py
+
+
+COPY src/patch_low_latency_gemm_sm12x.py /tmp/patch_low_latency_gemm_sm12x.py
+RUN python3 /tmp/patch_low_latency_gemm_sm12x.py && rm /tmp/patch_low_latency_gemm_sm12x.py
+
+COPY src/vllm_inproj_ba_gemv.py ${SP}/vllm_inproj_ba_gemv.py
+COPY src/patch_in_proj_ba_gemv.py /tmp/patch_in_proj_ba_gemv.py
+RUN python3 /tmp/patch_in_proj_ba_gemv.py && rm /tmp/patch_in_proj_ba_gemv.py
+
+COPY src/patch_ple_rendezvous.py /tmp/patch_ple_rendezvous.py
+RUN python3 /tmp/patch_ple_rendezvous.py && rm /tmp/patch_ple_rendezvous.py
+
+COPY src/patch_verify_topk_pivot.py /tmp/patch_verify_topk_pivot.py
+RUN python3 /tmp/patch_verify_topk_pivot.py && rm /tmp/patch_verify_topk_pivot.py

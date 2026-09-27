@@ -1,0 +1,33 @@
+{
+  "base_image": "qwen38-flash-dgx:iter6c-20260909",
+  "files": {
+    "config/speculative.py": {
+      "sha256": "eb1e6c33d22c5f07f744921f27edec66e4d5a17b2adb89608ae5913a1b64d7fd",
+      "bytes": 70774
+    },
+    "v1/core/sched/scheduler.py": {
+      "sha256": "a2137ae8ce0831f8d1fabdcf60afaebad86381dad6fa72ab8340ebe53f84259e",
+      "bytes": 149195
+    },
+    "v1/core/kv_cache_utils.py": {
+      "sha256": "f6643bad29b7b3cb044482b6736a042afa91a4f43a11f034317a8e8029d3a8a4",
+      "bytes": 109389
+    },
+    "v1/core/single_type_kv_cache_manager.py": {
+      "sha256": "8189ee3de7e947e66165d33252e2758e96e92d8b8f4e3d5066aa666ddfe93a08",
+      "bytes": 90069
+    },
+    "v1/simple_kv_offload/manager.py": {
+      "sha256": "d17d29556e61b82f6a8b3da998b995622bc0aed8ae395249bf315d21998fef9a",
+      "bytes": 37996
+    },
+    "distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py": {
+      "sha256": "616e7fd4cb0d09064cbc4d5735f607b37964c6be3b81e26de00d5913e0a9a3e3",
+      "bytes": 71958
+    },
+    "distributed/kv_transfer/kv_connector/v1/mooncake/store/worker.py": {
+      "sha256": "099b17b65e3cdc6f6b3d814d60645e80f17d14639649d114d07128d7f979fd8a",
+      "bytes": 82937
+    }
+  }
+}

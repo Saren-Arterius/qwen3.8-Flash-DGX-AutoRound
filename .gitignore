@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.log
+*.tmp
+*.bak
+.DS_Store
+models/
+checkpoints/
+*.safetensors
+*.gguf
+*.bin
+!config/v16b/*.gz
+results/private/

@@ -1,0 +1,3 @@
+recipe,run,sampling_seed,correct,total,token_cap
+v16b,1,20260908,21,24,12000
+v16b,2,20260908,22,24,12000

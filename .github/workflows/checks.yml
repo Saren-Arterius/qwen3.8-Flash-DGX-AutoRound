@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+name: checks
+
+'on':
+  push:
+  pull_request:
+
+jobs:
+  static-and-cpu:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install static tools and CPU test dependency
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check shellcheck-py==0.11.0.1 numpy==2.2.6
+      - name: Bash syntax and ShellCheck
+        run: |
+          find . -path './.git' -prune -o -path './.venv' -prune -o -name '*.sh' -type f -print0 | xargs -0 -r -n1 bash -n
+          find . -path './.git' -prune -o -path './.venv' -prune -o -name '*.sh' -type f -print0 | xargs -0 -r .venv/bin/shellcheck -S warning
+      - name: Python syntax
+        env:
+          PYTHONPYCACHEPREFIX: /tmp/recipe-pycache
+        run: |
+          find . -path './.git' -prune -o -path './.venv' -prune -o -name '*.py' -type f -print0 | xargs -0 -r .venv/bin/python -m py_compile
+      - name: CPU-only tests without models
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: build/image/src
+        run: |
+          # Image tests that import vLLM run inside build/image/build.sh --run.
+          .venv/bin/python build/image/tests/test_draft_vocab_cpu.py
+          .venv/bin/python build/model/test_rtn_int4_gptq.py
+          .venv/bin/python build/model/test_build_int4side.py
+          .venv/bin/python build/model/test_build_mtpdense.py
+      - name: Local Markdown links
+        run: .venv/bin/python ci/check_links.py
+      - name: Privacy grep, compressed data, image chunks and Git history
+        run: |
+          .venv/bin/python ci/check_privacy.py
+          set +e
+          rg -n -i --pcre2 --hidden -g '!.git/**' -g '!.venv/**' -g '!*.png' -g '!*.gz' '(?:/h[o]me/[a-z]+/|Users[/\\]|(?:192\.168|10\.0)\.\d+\.\d+|\bhf_[A-Za-z0-9]{20,}\b|\bsk[-][A-Za-z0-9]+|\bgh[p]_[A-Za-z0-9]+|api[_]key|token[=]|clau[d]e|anthrop[i]c|chatg[p]t|co[-]authored[-]by|generated\s+with)' .
+          rg_status=$?
+          set -e
+          if [ "$rg_status" -ne 1 ]; then
+            echo "Privacy grep found a match or failed (rg exit $rg_status)" >&2
+            exit 1
+          fi

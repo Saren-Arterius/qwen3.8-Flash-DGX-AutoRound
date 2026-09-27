@@ -1,0 +1,6 @@
+recipe,step_ms,window,adoption
+original,68.276,interleaved_window,baseline
+v13,67.167,interleaved_window,baseline
+v15,55.65,candidate_window,fallback
+v16b,52.33,candidate_window,promoted
+v16,51.45,candidate_window,reported_not_adopted
