@@ -36,23 +36,23 @@ The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 
 
 ## Why it is fast, and why it stays smart
 
-v16b combines a precision-conscious target with a compact model-native drafter, tuned for one GB10. Its **74.1 tok/s peak** on the copy-heavy single-stream test puts it among the fastest publicly documented Qwen3.8-Flash-Next GB10 recipes in that workload class. The same workload reaches **212.2 tok/s peak aggregate at eight streams**. The [per-round records](docs/BENCHMARKS.md#measured-peak-rates) show how the curve was measured.
+v16b serves Qwen3.8-Flash-Next on one GB10 with a fast target and a compact model-native drafter. Its **74.1 tok/s copy-heavy single-stream peak** puts it among the fastest publicly documented GB10 recipes in that workload class. The same workload reaches **212.2 tok/s peak aggregate at eight streams**. The [per-round records](docs/BENCHMARKS.md#measured-peak-rates) show the full curve.
 
-### Precision in the target
+### Keep the target precise
 
-The credited upstream checkpoint uses AutoRound W4A16 experts: four-bit expert weights with 16-bit activations. This recipe keeps FP8 side layers and an INT8 output head, rather than compressing those paths along with the experts into the lowest-bit formats. It retains higher precision in activations, side layers and the output head than approaches that quantize those same paths to three or four bits. The FP8 PLE table is memory-mapped from storage instead of held fully in GPU memory; the promoted launch allocates a 16 GB KV pool. Prefix caching saves repeated prompt work.
+AutoRound W4A16 packs routed-expert weights to four bits while retaining 16-bit activations. FP8 side layers and an INT8 output head keep important nonexpert paths at eight bits. Those paths retain more precision than designs that quantize the same matrices to three or four bits. The FP8 PLE table lives in a memory-mapped file rather than entirely in GPU memory. That leaves room for the promoted **16 GB KV pool** on the GB10. Prefix caching reuses shared prompt work.
 
-### More tokens from each step
+### Turn each target pass into more output
 
-The T80 dense-MTP drafter proposes three tokens ahead. Its 65,536-token draft vocabulary and FP8 drafter experts reduce proposal cost; the target checks candidates before they become output. At one stream, the median was **3.69 emitted tokens per target step**, including accepted drafts. The GB10 low-latency GEMM, sort-free verify-path top-k and split CUDA graphs reduce work around those steps. In the separate agent-shaped coding window, v16b measured **52.33 ms per step** against **68.276 ms** for the upstream base in interleaved tests, a **23%** reduction. The image also includes V2-compatible recurrent-state alignment and an asynchronous short-convolution metadata transfer; the measured launch uses synchronous scheduling.
+The dense T80 MTP drafter proposes three tokens ahead. A 65,536-token draft vocabulary and FP8 drafter experts make those proposals cheaper. The target verifies them with block rejection before output. In the copy-heavy single-stream run, the median was **3.69 emitted tokens per target step**, including accepted drafts. The low-latency GB10 GEMM, sort-free verify-path top-k and split CUDA graphs trim compute, selection and launch overhead around each pass. Together they form a fast serving path for the W4A16/FP8 target.
 
-### Speed earned from the model
+### Keep the GB10 busy with real requests
 
-3-bit GGUF and NVFP4 approaches put more emphasis on weight packing; n-gram copy speculation can reuse text already in context, and structured-output tests make continuations especially predictable. This recipe's acceleration instead uses the model's own dense MTP drafter and target-side verification. The mechanism also applies when the next phrase has not appeared earlier in the prompt. Its agent-shaped coding benchmark includes tools and thinking; the measured step-time gain there complements the copy-heavy peak without treating that peak as a general-use rate.
+The image runs vLLM's V2 model runner. With MTP selected, async scheduling is enabled by default. The image also carries an asynchronous short-convolution host-to-device transfer and guarded recurrent-state alignment for that runner. In an agent-shaped coding run with thinking and tools, v16b measured **52.3 ms per decode step**, down from **68.3 ms** for the upstream base in interleaved windows: **23% faster steps**. This separate workload demonstrates the step-time gain on agent-shaped traffic.
 
-### Quality checked in outputs
+### Protect output quality
 
-Draft verification follows the quantized target's token distribution; it does not substitute a copy heuristic for the target. Two seeds of the fixed 492-item evaluation scored **459/492** and **458/492** across code, math, knowledge, instructions, tool calls and long-context needles. The separate long-generation readings scored **21/24** and **22/24**. A teacher-forced comparison measured a **−0.06 percentage-point** top-1 agreement change, inside its pre-registered **0.15-point** control band. Together these records show the recipe's speed alongside measured behavior on varied tasks, with the target model making the final token decisions.
+3-bit GGUF and NVFP4 routes compress target weights. N-gram copy speculation thrives on repeated spans, while structured-output tasks reward predictable drafting. Here, the dense MTP head proposes tokens from the model, and block rejection checks them against the W4A16/FP8 target. The same path can draft original code, reasoning and tool output without a matching prior span. The fixed 492-item suite scored **459/492** and **458/492** over two seeds, covering code, math, knowledge, instructions, tools and long-context needles. Long-generation readings scored **21/24** and **22/24**. Teacher-forced top-1 agreement changed by **−0.06 percentage points**, inside its pre-registered **0.15-point** control band.
 
 ## Requirements
 
