@@ -50,6 +50,20 @@ On the agent-shaped workload, v16b spends 23% less time per decode step than the
 
 ## Quick start
 
+### With a coding agent
+
+Paste this into a coding agent running on your GB10:
+
+```text
+Set up the Qwen3.8 Flash DGX UltraFast recipe on this machine.
+Read https://raw.githubusercontent.com/dime-online/qwen3.8-Flash-DGX-UltraFast/main/AGENTS.md and follow it exactly.
+Start with the read-only checks, show me what you found, and get my approval before you install, download, build or launch anything.
+```
+
+The agent starts with read-only checks of your hardware, memory, disk, Docker and port 8000. It then asks for your approval before each of five steps: getting the repository and tools, downloading about 130 GB of public model files, building the image, building the drafter directory, and launching the server. It never stops or removes anything that was already running. [AGENTS.md](AGENTS.md) has the full instructions.
+
+### Manual
+
 Download the pinned public checkpoint and PLE table, build the image and the T80 drafter directory, then launch v16b and send a test request. [BUILD.md](docs/BUILD.md) has the reference hashes, build report and what each step checks.
 
 ```bash
@@ -122,6 +136,7 @@ AutoRound INT4 experts + FP8 side layers + INT8 output head
 
 | Path | Contents |
 |---|---|
+| [`AGENTS.md`](AGENTS.md) | Step-by-step setup instructions for a coding agent, with a user approval at each step |
 | [`recipe/config/v16b/`](recipe/config/v16b/) | Promoted launcher, `env`, image tag and draft vocabulary ids |
 | [`recipe/build/image/`](recipe/build/image/) | Staged iter6c and iter6d Dockerfiles, patches, hash preflight and CPU tests |
 | [`recipe/build/model/`](recipe/build/model/) | T80 dense-MTP g32 checkpoint builder, tests and reference report |
