@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Equal-length concurrent decode measurement; requires an explicit guard file."""
 from __future__ import annotations
 

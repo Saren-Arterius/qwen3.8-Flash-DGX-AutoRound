@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Resolve every local Markdown and HTML image/link target and fragment."""
 
 from __future__ import annotations

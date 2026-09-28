@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Measure copy-heavy decode throughput at one through eight concurrent streams.
 
 Three rounds run at each stream count, after one warmup. A generated public

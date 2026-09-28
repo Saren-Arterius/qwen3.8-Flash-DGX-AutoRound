@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Portable public-tree and Git-blob privacy gate, including binary containers."""
 
 from __future__ import annotations

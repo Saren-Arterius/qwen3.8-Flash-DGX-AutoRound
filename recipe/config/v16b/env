@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: CC-BY-NC-4.0
+# SPDX-License-Identifier: Apache-2.0
 NAME='qwen38-flash'
 MODEL_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
 TABLE_DIR="$HOME/models/ple-table-fp8"

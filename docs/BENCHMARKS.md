@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Benchmarks
 
 These v16b measurements use one GB10, the promoted image and the T80 drafter checkpoint. The [summary CSV](results/throughput.csv) joins two sessions of the same copy-heavy workload and metric. The first session publishes [15 per-round rows](results/copy-streams-rounds.csv) and [raw records](results/copy-streams-rounds.json); the extension publishes [12 per-round rows](results/copy-streams-extension-rounds.csv) and [raw records](results/copy-streams-extension-rounds.json), including request timelines and scheduler gauges.

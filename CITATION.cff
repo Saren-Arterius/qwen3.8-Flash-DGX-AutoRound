@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "Please cite this recipe if you use its original documentation or measurements."
+message: "Please cite this recipe if you use it or its measurements."
 title: "Qwen3.8 Flash · DGX UltraFast: v16b serving recipe"
 type: software
 authors:
@@ -7,4 +7,5 @@ authors:
 date-released: 2026-09-27
 version: v16b
 url: https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast
+license: Apache-2.0
 license-url: https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast/blob/main/LICENSE

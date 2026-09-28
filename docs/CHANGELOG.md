@@ -1,5 +1,9 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Qwen3.8 Flash · DGX UltraFast — changelog
+
+## Licensing change
+
+The whole repository is now licensed under Apache-2.0, matching the upstream recipe. The earlier noncommercial terms on original scripts, docs, data and images no longer apply. Attribution is kept through the root [NOTICE](../NOTICE) file.
 
 ## v16b — promoted configuration
 

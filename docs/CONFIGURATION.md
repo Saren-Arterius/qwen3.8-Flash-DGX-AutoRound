@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Configuration reference
 
 [`recipe/config/v16b/env`](../recipe/config/v16b/env) is sourced under a cleared environment by `launch.sh`. `serve.sh` then constructs Docker argv; `--print` emits one shell-quoted argument per line before any Docker command. The entries below are the **promoted values**. The published paths use `$HOME` and point at the prepared artifacts on the GB10.

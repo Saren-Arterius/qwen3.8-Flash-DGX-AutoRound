@@ -1,0 +1,18 @@
+Qwen3.8 Flash · DGX UltraFast
+Copyright 2026 dime-online (https://github.com/dime-online)
+
+This project is licensed under the Apache License, Version 2.0. See LICENSE.
+If you redistribute this work or a derivative of it, keep this NOTICE file
+and credit dime-online as described in section 4(d) of the license.
+
+This repository contains code derived from:
+Saren-Arterius/qwen3.8-Flash-DGX-AutoRound
+https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound
+Copyright 2026 blazux. Licensed under the Apache License, Version 2.0.
+
+The source snapshot includes patches to vLLM files and ports of public vLLM
+changes, also under the Apache License, Version 2.0. The vLLM project is
+credited at https://github.com/vllm-project/vllm .
+
+Model weights, datasets and downloaded container layers are not included in
+this repository and remain under their own terms.

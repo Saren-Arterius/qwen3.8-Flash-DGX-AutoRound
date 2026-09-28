@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" role="img" aria-label="Decode step time">
 <style>text{font-family:Inter, Manrope, "Space Grotesk", system-ui, Arial, sans-serif}</style>
 <text x="60" y="49" fill="#e8f0f4" font-size="27" font-weight="750">Decode step time</text>

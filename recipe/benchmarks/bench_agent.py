@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Agent-shaped decode benchmark for the Qwen3.8-Flash vLLM server on one GB10.
 
 Sends streaming chat completions built from ``prompts.json`` (system + tools +

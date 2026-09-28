@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <p align="center"><a href="https://github.com/dime-online"><img src="docs/assets/hero-banner-v7.png" alt="Qwen3.8 Flash · DGX UltraFast banner with 74 tok/s single stream and 212 tok/s aggregate on one DGX Spark, over cyan and magenta speed rays" width="100%"></a></p>
 
 # Qwen3.8 Flash · DGX UltraFast
@@ -7,7 +7,7 @@ A vLLM serving recipe for Qwen3.8-Flash-Next on a single NVIDIA DGX Spark or oth
 
 Based on [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound) (Apache-2.0, (c) blazux).
 
-![License](https://img.shields.io/badge/license-mixed%20Apache%202.0%20%7C%20noncommercial-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64)
+![License](https://img.shields.io/badge/license-Apache%202.0-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64)
 
 ## Results
 
@@ -130,7 +130,7 @@ AutoRound INT4 experts + FP8 side layers + INT8 output head
 
 The base recipe derives from [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound), Apache-2.0, copyright blazux. Thanks to the Qwen model authors and to the vLLM, Intel AutoRound and FlashInfer contributors. Model weights and downloaded datasets keep their own terms.
 
-The upstream-derived `recipe/{Dockerfile,.dockerignore,prepare.sh,src/,tools/,scripts/,build/}`, `recipe/benchmarks/decode_bench.py` and `recipe/config/v16b/{serve.sh,launch.sh}` remain **Apache-2.0**. Original code, where present, uses **PolyForm Noncommercial 1.0.0**; original prose, tables and assets use **CC BY-NC 4.0**. Attribution for original material is **dime-online**. See [LICENSE](LICENSE), [NOTICE](docs/NOTICE) and [license texts](docs/LICENSES/).
+Everything in this repository, code, docs, data and images, is licensed under **Apache-2.0**, the same license as the upstream recipe. You can use, modify and redistribute it, including commercially. If you redistribute it, keep the [NOTICE](NOTICE) file, which credits **dime-online** and the upstream authors. See [LICENSE](LICENSE).
 
 ## Citation
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LicenseRef-PolyForm-Noncommercial-1.0.0
+# SPDX-License-Identifier: Apache-2.0
 """Render source-backed CSV measurements as explicit light and dark SVGs."""
 from pathlib import Path
 import csv
@@ -23,7 +23,7 @@ def rows(name):
 
 def start(title, subtitle, colors):
     return [
-        '<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->',
+        '<!-- SPDX-License-Identifier: Apache-2.0 -->',
         f'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" role="img" aria-label="{title}">',
         f'<style>text{{font-family:{FONT}}}</style>',
         f'<text x="60" y="49" fill="{colors["ink"]}" font-size="27" font-weight="750">{title}</text>',

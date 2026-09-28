@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Build the v16b inputs
 
 The promoted v16b launch uses the **T80 dense-MTP g32** checkpoint and the

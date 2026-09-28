@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Architecture and build provenance
 
 The source snapshot's base [Dockerfile](../recipe/Dockerfile) starts from the digest-pinned Qwen preview vLLM image and adds PLE mmap, fp8 hybrid dispatch, prefix-cache support, model-loading changes and guard patches. The fp8 PLE table is read through mmap; the 16 GB KV pool is sized explicitly in the promoted launcher. The base build is useful on GB10 and remains Apache-2.0.

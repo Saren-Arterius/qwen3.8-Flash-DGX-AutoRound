@@ -1,4 +1,4 @@
-<!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Evaluation and quality
 
 The fixed suite had 492 items: code 100 (execution checked), math 140, knowledge 160, instruction following 60, tool calls 20 and long-context needles 12. Sampling used temperature 1.0, top-p 0.95, top-k 20, medium thinking, concurrency four and a 6,000-token cap. Both seeds used the same item manifest.
