@@ -34,25 +34,25 @@ The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/throughput-dark.svg"><img src="docs/assets/throughput-light.svg" alt="Measured peak copy-heavy decode throughput at one through eight streams" width="900"></picture></p>
 
-## Why this recipe
+## Why it is fast, and why it stays smart
 
-- **Traceable throughput:** Both stream sessions publish all 27 per-round records, including timelines and speculative-decoding telemetry, alongside the [runner](recipe/benchmarks/bench_copy_streams.py) and [summary CSV](docs/results/throughput.csv).
-- **One measured curve:** The same copy-heavy workload and all-decoding-window metric produce **74.1 / 110.0 / 132.9 / 155.5 / 175.8 / 191.5 / 205.8 / 212.2 tok/s peak** at 1–8 streams. The five-stream repeat measured **175.8 tok/s**, following **174.9 tok/s** in the first session.
-- **Measured step-time gain:** Interleaved same-night windows put the upstream baseline at **68.3 ms** and v16b at **52.3 ms** per decode step, a **23%** reduction.
-- **Steady speculative acceptance:** The 27 rounds measured **3.65–3.94 tokens per step** across 1–8 streams, while aggregate throughput rose with batching.
-- **Quality record:** Two seeds of the 492-item suite scored **93.1% / 93.3%**; a teacher-forced control measured **−0.06 percentage points** against its pre-registered **0.15-point** band.
-- **Public build path:** Pinned checkpoint downloads, a digest-checked image build, the T80 dense-MTP drafter builder and CPU checks are published in [BUILD.md](docs/BUILD.md) and the [recipe](recipe/).
+v16b combines a precision-conscious target with a compact model-native drafter, tuned for one GB10. Its **74.1 tok/s peak** on the copy-heavy single-stream test puts it among the fastest publicly documented Qwen3.8-Flash-Next GB10 recipes in that workload class. The same workload reaches **212.2 tok/s peak aggregate at eight streams**. The [per-round records](docs/BENCHMARKS.md#measured-peak-rates) show how the curve was measured.
 
-## How it compares
+### Precision in the target
 
-Each row reports the recipe's own GB10 workload and statistic, checked at its linked source on 2026-09-27. All rates are decode tok/s.
+The credited upstream checkpoint uses AutoRound W4A16 experts: four-bit expert weights with 16-bit activations. This recipe keeps FP8 side layers and an INT8 output head, rather than compressing those paths along with the experts into the lowest-bit formats. It retains higher precision in activations, side layers and the output head than approaches that quantize those same paths to three or four bits. The FP8 PLE table is memory-mapped from storage instead of held fully in GPU memory; the promoted launch allocates a 16 GB KV pool. Prefix caching saves repeated prompt work.
 
-| Recipe | Workload class and method | Statistic | Streams | Tok/s | Checked | Source and verification |
-|---|---|---|---:|---:|---|---|
-| DGX UltraFast v16b | Copy-heavy, low effort; shared prefix, all-decoding window | Peak of 3 rounds | 1 | 74.1 | 2026-09-27 | [Per-round record](docs/results/copy-streams-rounds.csv), source checked |
-| gitcommit90 NVFP4 | Structured output; own serving benchmark | Reported decode rate | 1 | 60.2 | 2026-09-27 | [Official measured results](https://github.com/gitcommit90/qwen38-flash-next-nvfp4-one-spark#measured-results), source checked |
-| myllmbox hibrid48 v4 | Spec-friendly pasture prompt; ten-second engine windows, three-run rung | Reported peak | 8 | 227 | 2026-09-27 | [Official v4 ladder](https://github.com/myllmbox/qwen38-flash-next-recipe#measured-performance-this-exact-kit-one-dgx-spark-k5-vmcompaction_proactiveness0), source checked |
-| DGX UltraFast v16b | Copy-heavy, low effort; shared prefix, all-decoding window | Peak of 3 rounds | 8 | 212.2 | 2026-09-27 | [Extension rounds](docs/results/copy-streams-extension-rounds.csv), source checked |
+### More tokens from each step
+
+The T80 dense-MTP drafter proposes three tokens ahead. Its 65,536-token draft vocabulary and FP8 drafter experts reduce proposal cost; the target checks candidates before they become output. At one stream, the median was **3.69 emitted tokens per target step**, including accepted drafts. The GB10 low-latency GEMM, sort-free verify-path top-k and split CUDA graphs reduce work around those steps. In the separate agent-shaped coding window, v16b measured **52.33 ms per step** against **68.276 ms** for the upstream base in interleaved tests, a **23%** reduction. The image also includes V2-compatible recurrent-state alignment and an asynchronous short-convolution metadata transfer; the measured launch uses synchronous scheduling.
+
+### Speed earned from the model
+
+3-bit GGUF and NVFP4 approaches put more emphasis on weight packing; n-gram copy speculation can reuse text already in context, and structured-output tests make continuations especially predictable. This recipe's acceleration instead uses the model's own dense MTP drafter and target-side verification. The mechanism also applies when the next phrase has not appeared earlier in the prompt. Its agent-shaped coding benchmark includes tools and thinking; the measured step-time gain there complements the copy-heavy peak without treating that peak as a general-use rate.
+
+### Quality checked in outputs
+
+Draft verification follows the quantized target's token distribution; it does not substitute a copy heuristic for the target. Two seeds of the fixed 492-item evaluation scored **459/492** and **458/492** across code, math, knowledge, instructions, tool calls and long-context needles. The separate long-generation readings scored **21/24** and **22/24**. A teacher-forced comparison measured a **−0.06 percentage-point** top-1 agreement change, inside its pre-registered **0.15-point** control band. Together these records show the recipe's speed alongside measured behavior on varied tasks, with the target model making the final token decisions.
 
 ## Requirements
 
