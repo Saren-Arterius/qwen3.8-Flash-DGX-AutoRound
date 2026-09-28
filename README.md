@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
-<p align="center"><img src="docs/assets/hero-lightspeed.png" alt="Qwen3.8 Flash DGX UltraFast performance graphic: 74 tok/s single stream and 212 tok/s aggregate on one NVIDIA DGX Spark, with cyan and magenta speed rays" width="100%"></p>
+<p align="center"><img src="docs/assets/hero-banner.png" alt="Qwen3.8 Flash · DGX UltraFast banner with 74 tok/s single stream and 212 tok/s aggregate on one DGX Spark, over cyan and magenta speed rays" width="100%"></p>
 
 # Qwen3.8 Flash · DGX UltraFast
 
