@@ -1,0 +1,4 @@
+prompt_tokens,v16b_cold_ttft_s,original_cold_ttft_s,v16b_prefill_tok_s,original_prefill_tok_s,increase_pct,repeats
+16384,4.08,13.99,4016,1171,243,3
+65536,27.01,61.19,2426,1071,127,3
+131072,59.24,123.13,2213,1065,108,3

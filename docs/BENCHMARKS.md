@@ -40,3 +40,15 @@ The coding benchmark used a cached long system prefix, tool schemas, six coding 
 The copy-heavy sessions measured **74.13 / 110.02 / 132.89 / 155.46 / 175.78 / 191.54 / 205.83 / 212.19 tok/s peak decode throughput** at **1 / 2 / 3 / 4 / 5 / 6 / 7 / 8 streams**. The TTFT column above gives the median across requests at each level. Both [first-session](results/copy-streams-rounds.csv) and [extension](results/copy-streams-extension-rounds.csv) per-round tables record simple total-tokens-per-wall-time alongside decode-window throughput.
 
 Warm time to first token on the cached coding prompt measured **0.57 s**. Long-context cold time to first token measured **4.1 / 27.0 / 59.2 s** at 16k / 64k / 128k prompt tokens. Warm cached readings at those lengths measured **0.963 / 0.682 / 0.465 s**. Each long-context cell had three repeats.
+
+## Cold prefill
+
+Cold prefill was measured on the same GB10 with the same long-context benchmark for the original recipe and v16b, using prompts of 16,384, 65,536 and 131,072 tokens with nothing cached and three repeats per cell. The rate is prompt tokens divided by the measured cold time to first token. Time to first token also carries scheduling, tokenization and the first sampled token, so these rates slightly understate pure prefill throughput. [Data](results/prefill.csv).
+
+| Cold prompt | Original TTFT, s | v16b TTFT, s | Original prefill, tok/s | v16b prefill, tok/s | Increase |
+|---|---:|---:|---:|---:|---:|
+| 16k | 13.99 | 4.08 | 1,171 | **4,016** | **+243%** |
+| 64k | 61.19 | 27.01 | 1,071 | **2,426** | **+127%** |
+| 128k | 123.13 | 59.24 | 1,065 | **2,213** | **+108%** |
+
+Most of the cold prefill gain comes from the fast PLE gather path, which removes serial page faults from the n-gram embedding lookup during prefill. v15, v16 and v16b measured within about a second of each other at 128k, so the later decode levers leave cold prefill unchanged.

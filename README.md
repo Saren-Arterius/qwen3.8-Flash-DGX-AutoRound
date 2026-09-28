@@ -19,6 +19,14 @@ v16b on one GB10 with the promoted launch settings. Each throughput figure is th
 
 <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/throughput-dark.svg"><img src="docs/assets/throughput-light.svg" alt="Measured peak copy-heavy decode throughput at one through eight streams" width="900"></picture></p>
 
+Cold prefill, with nothing cached, is 2× to 3.4× faster than the original recipe on the same GB10. Each rate is prompt tokens divided by cold time to first token, three repeats per cell, so it slightly understates pure prefill speed. [Method and data](docs/BENCHMARKS.md#cold-prefill).
+
+| Cold prompt | 16k | 64k | 128k |
+|---|---:|---:|---:|
+| v16b prefill, tok/s | **4,016** | **2,426** | **2,213** |
+| Original recipe prefill, tok/s | 1,171 | 1,071 | 1,065 |
+| Increase | **+243%** | **+127%** | **+108%** |
+
 | Measure | v16b | Conditions |
 |---|---:|---|
 | Decode step time | **52.33 ms** | Agent-shaped coding workload with thinking and tools; upstream base: 68.276 ms |
