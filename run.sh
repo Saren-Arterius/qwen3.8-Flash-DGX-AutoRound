@@ -129,6 +129,31 @@ if [ "$cp_now" != 0 ]; then
 fi
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
+# optional vLLM patches (recipe.yaml server.patches → patches/<name>.patch; default none): the files a patch touches are
+# copied out of the image, patched and mounted read-only over the image's own copies. The image itself is never changed.
+PATCHES="$(rkey server patches)"; PMOUNTS=()
+if [ -n "$PATCHES" ]; then
+  command -v patch >/dev/null || { echo "✗ server.patches needs the 'patch' tool on this box (apt install patch)"; exit 1; }
+  VLLM_DIR="$(docker run --rm --entrypoint python3 "$IMAGE" -c 'import importlib.util as u; print(u.find_spec("vllm").submodule_search_locations[0])')"
+  STAGE="$CACHE_ABS/patched"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+  cid="$(docker create "$IMAGE")"; FILES=()
+  pfail() { docker rm "$cid" >/dev/null 2>&1; echo "✗ $*"; exit 1; }
+  for p in ${PATCHES//,/ }; do
+    pf="patches/$p.patch"; [ -f "$pf" ] || pfail "server.patches: $pf not found"
+    while read -r rel; do
+      [ -f "$STAGE/$rel" ] && continue
+      mkdir -p "$STAGE/$(dirname "$rel")"
+      docker cp "$cid:$VLLM_DIR/$rel" "$STAGE/$rel" >/dev/null 2>&1 || pfail "patch $p: vllm/$rel is not in $IMAGE"
+      FILES+=("$rel")
+    done < <(sed -n 's#^+++ b/\([^[:space:]]*\).*#\1#p' "$pf")
+    patch --dry-run -s -p1 -d "$STAGE" < "$pf" >/dev/null 2>&1 || pfail "patch $p does not fit $IMAGE — remove it from server.patches"
+    patch -s -p1 --no-backup-if-mismatch -d "$STAGE" < "$pf"
+    echo "· patch $p applied"
+  done
+  docker rm "$cid" >/dev/null
+  for rel in "${FILES[@]}"; do PMOUNTS+=(-v "$STAGE/$rel:$VLLM_DIR/$rel:ro"); done
+fi
+
 # memory gate (unified memory: a serve relaunched seconds after a teardown gets a PHANTOM "CUDA out of memory" — the
 # previous container's GPU pages take 30-60 s to come back). The load needs ~100G available; the table then fills the rest.
 t=0; while :; do
@@ -149,6 +174,7 @@ docker run -d --name "$NAME" --gpus all --ipc=host \
   -p "$PORT:8000" \
   -v "$MODELS_ABS:/models" -v "$CACHE_ABS:/cache" \
   -v "$(readlink -f "$MODEL_DIR"):/models/$LOCAL_NAME" \
+  "${PMOUNTS[@]}" \
   -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 \
   -e FLASHINFER_WORKSPACE_BASE=/cache/flashinfer-workspace \
   -e VLLM_CACHE_ROOT=/cache/vllm-cache \

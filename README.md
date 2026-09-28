@@ -169,6 +169,9 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 - **`max-num-batched-tokens`**: also the image-input encoder budget — 8192 fits one max-resolution image (~4.1k tokens).
 - **`async-scheduling` on**. Thinking is ON by default (model native); disable per request with
   `"chat_template_kwargs": {"enable_thinking": false}` for max speed on structured output.
+- **`patches`** (server): optional vLLM patches from [`patches/`](patches/), off by default — e.g. `patches: hermes-chat`
+  for the Hermes agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)). Applied at launch over the image's
+  files; the image itself is unchanged.
 
 ## What's in the image
 
