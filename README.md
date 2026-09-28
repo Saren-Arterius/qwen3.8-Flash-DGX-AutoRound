@@ -133,3 +133,7 @@ GitHub's citation menu reads [CITATION.cff](CITATION.cff) from the repository ro
   url = {https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast}
 }
 ```
+
+## Draft vocabulary note
+
+The MTP drafter proposes tokens from a bundled 65,536-id draft vocabulary built from English and code text. Output in other languages, notably CJK, gets lower draft acceptance and therefore lower decode speed; upstream reports the same effect for its own English/code-weighted set. Output quality is unaffected, because the target model verifies every drafted token with block rejection. See [Configuration](docs/CONFIGURATION.md#draft-vocabulary) for details.
