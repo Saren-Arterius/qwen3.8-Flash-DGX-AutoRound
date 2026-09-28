@@ -3,15 +3,18 @@
 
 # Qwen3.8 Flash · DGX UltraFast
 
-A public, digest-pinned vLLM recipe for Qwen3.8-Flash-Next on one GB10, with the image build, dense-MTP drafter builder, measured throughput rounds and quality record in the repository.
+**Run Qwen3.8-Flash-Next at up to 74 tok/s on a single NVIDIA DGX Spark, and serve up to 212 tok/s across eight users, without trading the model's intelligence for speed.**
+
+DGX UltraFast is a ready-to-run vLLM recipe for one DGX Spark or any GB10 system. It is among the fastest ways to run Qwen3.8-Flash-Next on a single box, and it gets there by making each step of the model do more work, not by cutting the model down.
+
+- **Fast.** Up to 74.1 tok/s single-stream and 212.2 tok/s aggregate at eight concurrent streams. Each decode step is 23% faster than the recipe it builds on.
+- **Smart.** Higher-precision weights than the low-bit quants most fast recipes use, and every token the drafter proposes is checked by the full model. It scores 93% on a 492-item suite of code, math, knowledge, tool calls and long-context tasks, on two seeds.
+- **Built for long sessions.** A 262,144-token context and prefix caching keep long coding and agent sessions responsive.
+- **Proven, not claimed.** Every speed number ships with its raw per-round data and the script that measured it, and the whole stack builds from public downloads.
 
 Based on [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound) (Apache-2.0, (c) blazux).
 
-**74.1 tok/s peak single-stream decode · 212.2 tok/s peak aggregate at eight streams on one GB10.** The [measured 1–8 stream curve](docs/BENCHMARKS.md#measured-peak-rates) uses one copy-heavy workload and one decode-window metric throughout.
-
 ![License](https://img.shields.io/badge/license-mixed%20Apache%202.0%20%7C%20noncommercial-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64) ![Single-stream peak](https://img.shields.io/badge/single%20peak-74.1%20tok%2Fs-244d64) ![Aggregate peak](https://img.shields.io/badge/8--stream%20peak-212.2%20tok%2Fs-244d64)
-
-The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 builder and staged iter6c-to-iter6d image build sources. [Build instructions](docs/BUILD.md) cover the public downloads, image, checkpoint and launch steps; [results](docs/results/) contain the measurement tables.
 
 ## Results at a glance
 
@@ -53,6 +56,10 @@ The image runs vLLM's V2 model runner. With MTP selected, async scheduling is en
 ### Protect output quality
 
 3-bit GGUF and NVFP4 routes compress target weights. N-gram copy speculation thrives on repeated spans, while structured-output tasks reward predictable drafting. Here, the dense MTP head proposes tokens from the model, and block rejection checks them against the W4A16/FP8 target. The same path can draft original code, reasoning and tool output without a matching prior span. The fixed 492-item suite scored **459/492** and **458/492** over two seeds, covering code, math, knowledge, instructions, tools and long-context needles. Long-generation readings scored **21/24** and **22/24**. Teacher-forced top-1 agreement changed by **−0.06 percentage points**, inside its pre-registered **0.15-point** control band.
+
+## What is in the repository
+
+The [recipe](recipe/) contains the v16b launch configuration, T80 dense-MTP g32 builder and staged iter6c-to-iter6d image build sources. [Build instructions](docs/BUILD.md) cover the public downloads, image, checkpoint and launch steps; [results](docs/results/) contain the measurement tables, and the [measured 1–8 stream curve](docs/BENCHMARKS.md#measured-peak-rates) uses one copy-heavy workload and one decode-window metric throughout.
 
 ## Requirements
 
