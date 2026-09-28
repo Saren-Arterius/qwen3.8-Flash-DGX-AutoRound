@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: CC-BY-NC-4.0 -->
-<p align="center"><a href="https://github.com/dime-online"><img src="docs/assets/hero-banner-v5.png" alt="Qwen3.8 Flash · DGX UltraFast banner with 74 tok/s single stream and 212 tok/s aggregate on one DGX Spark, over cyan and magenta speed rays" width="100%"></a></p>
+<p align="center"><a href="https://github.com/dime-online"><img src="docs/assets/hero-banner-v6.png" alt="Qwen3.8 Flash · DGX UltraFast banner with 74 tok/s single stream and 212 tok/s aggregate on one DGX Spark, over cyan and magenta speed rays" width="100%"></a></p>
 
 # Qwen3.8 Flash · DGX UltraFast
 
