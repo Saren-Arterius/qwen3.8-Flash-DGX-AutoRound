@@ -7,7 +7,7 @@
 
 DGX UltraFast is a ready-to-run vLLM recipe for one DGX Spark or any GB10 system. It is among the fastest ways to run Qwen3.8-Flash-Next on a single box, and it gets there by making each step of the model do more work, not by cutting the model down.
 
-- **Fast.** Up to 74.1 tok/s single-stream and 212.2 tok/s aggregate at eight concurrent streams. Each decode step is 23% faster than the recipe it builds on.
+- **Fast.** Up to 74.1 tok/s single-stream and 212.2 tok/s aggregate at eight concurrent streams. Decode runs 31% faster than the recipe it builds on (52.3 ms per step instead of 68.3 ms), with output quality statistically indistinguishable from the original.
 - **Smart.** Higher-precision weights than the low-bit quants most fast recipes use, and every token the drafter proposes is checked by the full model. It scores 93% on a 492-item suite of code, math, knowledge, tool calls and long-context tasks, on two seeds.
 - **Built for long sessions.** A 262,144-token context and prefix caching keep long coding and agent sessions responsive.
 - **Proven, not claimed.** Every speed number ships with its raw per-round data and the script that measured it, and the whole stack builds from public downloads.
@@ -51,7 +51,7 @@ The dense T80 MTP drafter proposes three tokens ahead. A 65,536-token draft voca
 
 ### Keep the GB10 busy with real requests
 
-The image runs vLLM's V2 model runner. With MTP selected, async scheduling is enabled by default. The image also carries an asynchronous short-convolution host-to-device transfer and guarded recurrent-state alignment for that runner. In an agent-shaped coding run with thinking and tools, v16b measured **52.3 ms per decode step**, down from **68.3 ms** for the upstream base in interleaved windows: **23% faster steps**. This separate workload demonstrates the step-time gain on agent-shaped traffic.
+The image runs vLLM's V2 model runner. With MTP selected, async scheduling is enabled by default. The image also carries an asynchronous short-convolution host-to-device transfer and guarded recurrent-state alignment for that runner. In an agent-shaped coding run with thinking and tools, v16b measured **52.3 ms per decode step**, down from **68.3 ms** for the upstream base in interleaved windows: **31% faster decode** (23% less time per step). This separate workload demonstrates the step-time gain on agent-shaped traffic.
 
 ### Protect output quality
 
