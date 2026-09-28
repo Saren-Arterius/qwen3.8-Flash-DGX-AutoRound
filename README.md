@@ -86,6 +86,8 @@ curl -fsS http://localhost:8000/v1/chat/completions \
 
 Follow startup with `docker logs -f qwen38-flash`. The server exposes an OpenAI-compatible API on port 8000 under the model name `qwen`. The T80 builder converts nine drafter modules at group size 32; its reference conversion took 4.626 s after download and wrote 5,118,048,680 new bytes.
 
+> **Running on your own GB10?** If the recipe helped, a ⭐ helps other Spark owners find it, and your numbers are welcome as a [benchmark submission](https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast/issues/new?template=benchmark_submission.md).
+
 ## Configuration
 
 The promoted launch pins `GPU_MEM=0.01`, `KV_BYTES=16g`, `SEQS=8`, `CTX=262144`, MTP depth 3, block rejection with probabilistic draft sampling, and prefix caching. `launch.sh` sources [`recipe/config/v16b/env`](recipe/config/v16b/env) under a cleared environment, so edit that file rather than exporting variables. Changing any pinned value produces a new variant whose speed and quality must be measured separately. [Configuration reference](docs/CONFIGURATION.md).
