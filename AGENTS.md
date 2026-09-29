@@ -17,7 +17,7 @@ You are helping a person install the Qwen3.8 Flash DGX UltraFast recipe on their
 
 ## How to run commands on the GB10
 
-Ask the person how to reach the GB10, for example `ssh user@gb10.local` or an SSH config alias. Use it as `GB10` below. The person must have key-based SSH login working and must have connected once themselves to accept the host key. Use `ssh -o BatchMode=yes GB10 '...'`, so a password prompt fails instead of waiting. If that fails, stop and ask the person to fix SSH access.
+Ask the person how to reach the GB10, for example `ssh user@hostname` or an SSH config alias such as `ssh gb10`. Use it as `GB10` below. The person must have key-based SSH login working and must have connected once themselves to accept the host key. Use `ssh -o BatchMode=yes GB10 '...'`, so a password prompt fails instead of waiting. If that fails, stop and ask the person to fix SSH access.
 
 If you are running directly in a terminal on the GB10 itself, run the same commands locally without `ssh`.
 
