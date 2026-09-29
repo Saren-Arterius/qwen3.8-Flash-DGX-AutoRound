@@ -37,6 +37,7 @@ Cold prefill, with nothing cached, is 2× to 3.4× faster than the original reci
 | Long generation | **21/24** and **22/24** | Two readings, 12,000-token cap |
 | Teacher-forced top-1 agreement delta | **−0.06 pp** | Pre-registered control band: 0.15 pp |
 | KV pool / configured context | **16 GB / 262,144 tokens** | Promoted launch settings |
+| Input | **Text, image and video** | The vision encoder is kept; checked with image and video requests on v16b |
 | Model residency / available memory | **~71 GiB / 16.5 GiB** | Base recipe residency / v16b capacity-run low-water |
 
 On the agent-shaped workload, v16b spends 23% less time per decode step than the upstream base, or 1.30× as many steps per second. [Benchmark method](docs/BENCHMARKS.md) · [Evaluation](docs/EVALS.md).
@@ -98,7 +99,7 @@ curl -fsS http://localhost:8000/v1/chat/completions \
   -d '{"model":"qwen","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":512}'
 ```
 
-Follow startup with `docker logs -f qwen38-flash`. The server exposes an OpenAI-compatible API on port 8000 under the model name `qwen`. The T80 builder converts nine drafter modules at group size 32; its reference conversion took 4.626 s after download and wrote 5,118,048,680 new bytes.
+Follow startup with `docker logs -f qwen38-flash`. The server exposes an OpenAI-compatible API on port 8000 under the model name `qwen`. It accepts text, images (`image_url`) and video (`video_url`), since the recipe keeps the model's vision encoder. Audio input is not supported. The T80 builder converts nine drafter modules at group size 32; its reference conversion took 4.626 s after download and wrote 5,118,048,680 new bytes.
 
 > **Running on your own GB10?** If the recipe helped, a ⭐ helps other Spark owners find it, and your numbers are welcome as a [benchmark submission](https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast/issues/new?template=benchmark_submission.md).
 
