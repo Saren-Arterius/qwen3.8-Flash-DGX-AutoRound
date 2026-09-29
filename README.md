@@ -52,15 +52,15 @@ On the agent-shaped workload, v16b spends 23% less time per decode step than the
 
 ### With a coding agent
 
-Paste this into a coding agent running on your GB10:
+Run a coding agent that can use a terminal on your everyday computer, and paste this prompt. The agent connects to your GB10 over SSH and does the setup there. Set up key-based SSH login to the GB10 first.
 
 ```text
-Set up the Qwen3.8 Flash DGX UltraFast recipe on this machine.
+Set up the Qwen3.8 Flash DGX UltraFast recipe on my GB10 over SSH.
 Read https://raw.githubusercontent.com/dime-online/qwen3.8-Flash-DGX-UltraFast/main/AGENTS.md and follow it exactly.
-Start with the read-only checks, show me what you found, and get my approval before you install, download, build or launch anything.
+Ask me how to reach the GB10, run the read-only checks, show me what you found, and get my approval before you install, download, build or launch anything.
 ```
 
-The agent starts with read-only checks of your hardware, memory, disk, Docker and port 8000. It then asks for your approval before each of five steps: getting the repository and tools, downloading about 130 GB of public model files, building the image, building the drafter directory, and launching the server. It never stops or removes anything that was already running. [AGENTS.md](AGENTS.md) has the full instructions.
+The agent first checks the GB10's hardware, memory, disk, Docker and port 8000 without changing anything. It then asks for your approval before each of five steps: getting the repository and tools, downloading about 130 GB of public model files, building the image, building the drafter directory, and launching the server. Long steps run in the background on the GB10, so a dropped connection doesn't interrupt them. The agent never stops or removes anything that was already running. [AGENTS.md](AGENTS.md) has the full instructions.
 
 ### Manual
 
@@ -136,7 +136,7 @@ AutoRound INT4 experts + FP8 side layers + INT8 output head
 
 | Path | Contents |
 |---|---|
-| [`AGENTS.md`](AGENTS.md) | Step-by-step setup instructions for a coding agent, with a user approval at each step |
+| [`AGENTS.md`](AGENTS.md) | Step-by-step instructions for a coding agent to set up the recipe on a GB10 over SSH, with your approval at each step |
 | [`recipe/config/v16b/`](recipe/config/v16b/) | Promoted launcher, `env`, image tag and draft vocabulary ids |
 | [`recipe/build/image/`](recipe/build/image/) | Staged iter6c and iter6d Dockerfiles, patches, hash preflight and CPU tests |
 | [`recipe/build/model/`](recipe/build/model/) | T80 dense-MTP g32 checkpoint builder, tests and reference report |
