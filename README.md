@@ -9,7 +9,8 @@ so the same speed. To switch: in `recipe.yaml` comment the active `model:` line 
 Details in [Which checkpoint](#which-checkpoint).
 
 One box, one model. **73 tok/s single-stream (82 peak), 288 tok/s at 16 streams (318 peak), an 830k-token KV pool** — and
-it boots in about four minutes. Three commands.
+it boots in about four minutes. Three commands. **New in v5: an opt-in dynamic draft depth — +12 to +19 % on long prose, level
+on everything else** ([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)).
 
 ## Measured performance (this exact kit, one DGX Spark, K=5, `vm.compaction_proactiveness=0`)
 
@@ -44,6 +45,46 @@ model's recurrent state).
 | 6 · code | — | 169 | **180** | — → 8.3 | 3.4 |
 | 8 · code  | 182 | 194 | **205** | 6.6 → 7.1 | 3.4 |
 
+## Dynamic draft depth (v5, opt-in)
+
+With `mtp_depth.mode: dynamic` in `recipe.yaml`, each request picks its own draft depth (3 to 6) from what it has recently
+accepted, and a batch drafts its requests' average depth. Prose wants short drafts, code and JSON long ones; the fixed K=5 of
+v4 is right for code and too deep for prose. The default stays `mode: off` — exactly v4.
+
+**Dynamic vs fixed K=5 (v4), aggregate tok/s** (one DGX Spark, thinking off, averages of 3 runs; c=1 = one full answer,
+c≥2 = 300 s with every stream kept busy):
+
+| content | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
+|---|---|---|---|---|---|---|
+| long prose (7k-word story) | 39.7 → **44.3** (+12 %) | 61.0 → **69.7** (+14 %) | 90.3 → **102.3** (+13 %) | 108.7 → **124.0** (+14 %) | 124.7 → **143.0** (+15 %) | 144.7 → **172.3** (+19 %) |
+| mixed (code + explanation) | 52.7 → 55.0 | 81.3 → 82.7 | 120.0 → 120.0 | 154.3 → 151.3 | 182.0 → 181.0 | 218.0 → 214.3 |
+| JSON (schema-constrained) | 69.7 → 69.3 | 103.7 → 105.7 | 149.3 → 150.0 | 178.3 → 178.0 | 203.7 → 201.7 | 232.7 → 233.3 |
+| code (TypeScript) | 69.7 → 69.7 | 102.3 → 103.0 | 140.0 → 142.3 | 164.0 → 169.0 | 185.3 → 185.3 | 217.0 → 213.3 |
+
+One full thinking-on request (the pasture prompt), split by phase so answers that think longer or shorter stay comparable:
+thinking 49.7 → **51.4** tok/s, writing the code 70.9 → **72.1** tok/s (fixed K=3 / 4 / 6: 50.7 / 50.0 / 48.0 thinking, 63.2 / 66.3 /
+68.8 writing the code).
+
+**To turn it on**, in `recipe.yaml`:
+
+1. `mtp_depth.mode: dynamic`,
+2. swap in the two commented lines next to `speculative-config` and `compilation-config` (`num_speculative_tokens: 6` and
+   its capture sizes),
+3. `./run.sh`.
+
+**Knobs** (`mtp_depth` in `recipe.yaml`; `run.sh` writes them to `cache/mbx-depth.json`, and the serve re-reads that file
+while it runs — edit it to change them live):
+
+| knob | default | what it does |
+|---|---|---|
+| `min` | 3 | lowest draft depth |
+| `window` | 48 | steps of history each decision looks at (8–128) |
+| `promote` | [60, 45] | +2 / +1 depth when the deepest position was accepted on more than this % of the window |
+| `demote` | [25, 15] | −1 / −2 depth when below this % |
+| `log` | false | `true` = one log line per decision: depth before → after and the measured rate |
+
+The deepest depth is `num_speculative_tokens`. For 7, add the multiples of 8 (8 × 1 … 8 × seats) to the capture sizes.
+
 ## Quality (measured on this model, thinking on)
 
 Both checkpoints, lm-evaluation-harness against a running serve, **thinking on**, temperature 0.6 / top-p 0.95 / top-k 20,
@@ -65,6 +106,11 @@ four questions each. The abliterated body thinks shorter (median reasoning −8 
 often. Published leaderboard numbers use other prompts, few-shot counts and full sets — a sanity band, not a column.
 
 ## What changed
+
+**v5 (2026-10-01): dynamic draft depth, opt-in.** Per-request draft depth from measured acceptance, live-tunable knobs,
++12 to +19 % on long prose at every concurrency, level on mixed text, JSON and code
+([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)). With `mode: off` (the default) the serve is v4. v4 stays available:
+`git checkout v4`.
 
 **v4 (2026-09-25): vLLM 0.30, five sampled draft tokens, an 830k-token pool and 16 seats.**
 
@@ -169,13 +215,14 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 - **`max-num-batched-tokens`**: also the image-input encoder budget — 8192 fits one max-resolution image (~4.1k tokens).
 - **`async-scheduling` on**. Thinking is ON by default (model native); disable per request with
   `"chat_template_kwargs": {"enable_thinking": false}` for max speed on structured output.
+- **`mtp_depth`**: dynamic draft depth, off by default — see [Dynamic draft depth](#dynamic-draft-depth-v5-opt-in).
 - **`patches`** (server): optional vLLM patches from [`patches/`](patches/), off by default — e.g. `patches: hermes-chat`
   for the Hermes agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)). Applied at launch over the image's
   files; the image itself is unchanged.
 
 ## What's in the image
 
-`myllmbox/qwen38-flash-next-vllm:v4` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
+`myllmbox/qwen38-flash-next-vllm:v5` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
 edit that refuses to apply twice and fails the build if its target moved:
 
 1. **the NVFP4 n-gram table** on 0.30's embedding plugin — stock 0.30 refuses this checkpoint's table,
@@ -184,12 +231,14 @@ edit that refuses to apply twice and fails the build if its target moved:
    [vllm-project/vllm#58449](https://github.com/vllm-project/vllm/pull/58449),
 4. the loader's page-cache drop, the QSA pre-indexer rope clamp, and two inert knobs,
 5. **the table library** (`/opt/mbx/lib/libmbx_ple_nvme.so`, binary): prepares and serves the table map; it only accepts this
-   release's n-gram table and stops with "invalid quant" otherwise.
+   release's n-gram table and stops with "invalid quant" otherwise,
+6. **draft-depth hooks** and the depth library (`/opt/mbx/lib/libmbx_mtp.so`, binary): idle with `mtp_depth.mode: off`.
 
-Digest: `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`.
+Digest: `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`.
 
-v3 (`…-vllm:v3`, vLLM 0.29, digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay
-available: `git checkout v3` / `v2` / `v1`.
+v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
+digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v4` /
+`v3` / `v2` / `v1`.
 
 ## The full box
 
