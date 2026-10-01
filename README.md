@@ -8,62 +8,56 @@ body with the same output head, no refusals, no guardrails — gated, research /
 so the same speed. To switch: in `recipe.yaml` comment the active `model:` line and uncomment the other, then `./run.sh`.
 Details in [Which checkpoint](#which-checkpoint).
 
-One box, one model. **73 tok/s single-stream (82 peak), 288 tok/s at 16 streams (318 peak), an 830k-token KV pool** — and
-it boots in about four minutes. Three commands. **New in v5: an opt-in dynamic draft depth — +12 to +19 % on long prose, level
-on everything else** ([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)).
-
-## Measured performance (this exact kit, one DGX Spark, K=5, `vm.compaction_proactiveness=0`)
-
-**v4 ladder (2026-09-25, vLLM 0.30, image v4, `hibrid48`, 27G bf16 pin, 16 seats, Marlin MoE)** — this kit exactly as shipped,
-myllmbox "pasture" prompt, 10-second engine windows (all streams decoding, zero prefill in the window), averages of 3 runs per
-rung. Thinking off; the single-stream peak is from a full thinking-on request (its code phase).
-
-| concurrent requests | **PEAK tok/s** (v3 → v4) | average tok/s | per-stream (v3 → v4) | acceptance |
-|---|---|---|---|---|
-| 1 | 68 → **82** | 73 | 60 → **73** | 5.06 |
-| 2 | 100 → **123** | 113 | 47 → **56** | 5.08 |
-| 4 | 145 → **162** | 154 | 33 → **38** | 5.11 |
-| 6 | 180 → **198** | 188 | 28 → **31** | 5.14 |
-| 8 | 205 → **227** | 215 | 24 → **27** | 5.12 |
-| 12 | — → **270** | 253 | — → **21** | 5.14 |
-| 16 | — → **318** | 288 | — → **18** | 5.13 |
-
-Reading it: **every rung is 11–22 % faster than v3, and the box now seats twice as many requests.** Each engine step drafts
-five tokens instead of three and keeps 5.1 of a possible 6 — the drafter's tokens are sampled from its own distribution and
-verified against the model's (see [What changed](#what-changed)). One full thinking-on request (reasoning, then the answer):
-**57 tok/s on average, 77 while writing the code, 82 at peak** (v3: 50 / 62 / 67). The pool is 2.5× v3's in tokens with bf16
-KV, so every seat carries more context; 16 streams is the practical top (each running request holds ~36k tokens of pool for the
-model's recurrent state).
-
-**v3 ladder (2026-09-14, vLLM 0.29, K=3, 8G fp8 pin)** — kept as the reference v4 is measured against:
-
-| concurrent requests | v2 sustained | v3 sustained | **v3 peak** | engine steps/s (v2 → v3) | acceptance |
-|---|---|---|---|---|---|
-| 1 · code | 50–51 | 60 | **68** | 14.4 → 17.7 | 3.4 |
-| 2 · code | — | 94 | **100** | — → 13.9 | 3.4 |
-| 4 · code | 129 | 134 | **145** | 9.3 → 10.0 | 3.4 |
-| 6 · code | — | 169 | **180** | — → 8.3 | 3.4 |
-| 8 · code  | 182 | 194 | **205** | 6.6 → 7.1 | 3.4 |
+One box, one model. **86 tok/s peak.** Single-stream averages: **70 tok/s code · 69 structured output · 44 long prose ·
+55 mixed.** An 830k-token KV pool, a four-minute boot, three commands. **New in v5: an opt-in dynamic draft depth — +12 to
++19 % on long prose, faster on both phases of a thinking-on request, level on everything else**
+([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)).
 
 ## Dynamic draft depth (v5, opt-in)
 
-With `mtp_depth.mode: dynamic` in `recipe.yaml`, each request picks its own draft depth (3 to 6) from what it has recently
-accepted, and a batch drafts its requests' average depth. Prose wants short drafts, code and JSON long ones; the fixed K=5 of
-v4 is right for code and too deep for prose. The default stays `mode: off` — exactly v4.
+**How the dynamic depth works.** Speculative decoding drafts several tokens ahead and the model checks them in one step; how
+many of them survive depends on what is being written. Long prose keeps about the first three, code and JSON often all six. A
+fixed depth is therefore too deep for prose (every rejected draft is wasted work) and too shallow for code. With
+`mode: dynamic` every request keeps its own depth between `min` and `num_speculative_tokens`: it watches, over its last
+`window` steps, how often its deepest drafted position was accepted, and moves one or two steps deeper when that rate is above
+`promote` and shallower when it is below `demote`. Requests that are batched together draft their average depth. Prose
+settles at 3, code and JSON at 5–6, and a thinking-on request changes depth between its reasoning and its answer.
 
-**Dynamic vs fixed K=5 (v4), aggregate tok/s** (one DGX Spark, thinking off, averages of 3 runs; c=1 = one full answer,
-c≥2 = 300 s with every stream kept busy):
+**v5 vs every fixed depth on one full thinking-on request** (the pasture prompt: reasoning, then an HTML/JS scene), each phase on its own, because
+answers think for different lengths (averages of 3 runs, tok/s):
 
-| content | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
+| phase | fixed K=3 | fixed K=4 | fixed K=5 | fixed K=6 | **v5 (dynamic)** |
+|---|---|---|---|---|---|
+| thinking | 50.7 | 50.0 | 49.7 | 48.0 | **51.4** |
+| writing the code | 63.2 | 66.3 | 70.9 | 68.8 | **72.1** |
+
+**v5 vs fixed K=3 and K=5 at every concurrency, aggregate tok/s** (same box and image, thinking off, averages of 3 runs; c=1 = one full answer,
+c≥2 = 300 s with every stream kept busy; fixed K=3 / K=5 = `mode: dynamic` with `min` pinned and promotion off). The best
+value of each row is bold; the mixed prompt is in the table above.
+
+**Long prose (7,000-word story)**
+
+| depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
 |---|---|---|---|---|---|---|
-| long prose (7k-word story) | 39.7 → **44.3** (+12 %) | 61.0 → **69.7** (+14 %) | 90.3 → **102.3** (+13 %) | 108.7 → **124.0** (+14 %) | 124.7 → **143.0** (+15 %) | 144.7 → **172.3** (+19 %) |
-| mixed (code + explanation) | 52.7 → 55.0 | 81.3 → 82.7 | 120.0 → 120.0 | 154.3 → 151.3 | 182.0 → 181.0 | 218.0 → 214.3 |
-| JSON (schema-constrained) | 69.7 → 69.3 | 103.7 → 105.7 | 149.3 → 150.0 | 178.3 → 178.0 | 203.7 → 201.7 | 232.7 → 233.3 |
-| code (TypeScript) | 69.7 → 69.7 | 102.3 → 103.0 | 140.0 → 142.3 | 164.0 → 169.0 | 185.3 → 185.3 | 217.0 → 213.3 |
+| fixed K=3 | 44.0 | **70.0** | **103.3** | **124.3** | **143.0** | 172.0 |
+| fixed K=5 | 39.7 | 61.0 | 90.3 | 108.7 | 124.7 | 144.7 |
+| **v5 (dynamic)** | **44.3** | 69.7 | 102.3 | 124.0 | **143.0** | **172.3** |
 
-One full thinking-on request (the pasture prompt), split by phase so answers that think longer or shorter stay comparable:
-thinking 49.7 → **51.4** tok/s, writing the code 70.9 → **72.1** tok/s (fixed K=3 / 4 / 6: 50.7 / 50.0 / 48.0 thinking, 63.2 / 66.3 /
-68.8 writing the code).
+**Code (TypeScript)**
+
+| depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
+|---|---|---|---|---|---|---|
+| fixed K=3 | 62.3 | 93.0 | 132.3 | 160.3 | 180.3 | 214.3 |
+| fixed K=5 | **69.7** | 102.3 | 140.0 | 164.0 | **185.3** | **217.0** |
+| **v5 (dynamic)** | **69.7** | **103.0** | **142.3** | **169.0** | **185.3** | 213.3 |
+
+**Structured output (JSON schema)**
+
+| depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
+|---|---|---|---|---|---|---|
+| fixed K=3 | 61.7 | 95.3 | 139.3 | 168.3 | 193.0 | 229.7 |
+| fixed K=5 | **69.7** | 103.7 | 149.3 | **178.3** | **203.7** | 232.7 |
+| **v5 (dynamic)** | 69.3 | **105.7** | **150.0** | 178.0 | 201.7 | **233.3** |
 
 **To turn it on**, in `recipe.yaml`:
 
@@ -84,6 +78,25 @@ while it runs — edit it to change them live):
 | `log` | false | `true` = one log line per decision: depth before → after and the measured rate |
 
 The deepest depth is `num_speculative_tokens`. For 7, add the multiples of 8 (8 × 1 … 8 × seats) to the capture sizes.
+
+## Measured performance (v5, one DGX Spark, `vm.compaction_proactiveness=0`)
+
+**2026-10-01, vLLM 0.30, image v5, `hibrid48`, bf16 KV, 16 seats, Marlin MoE.** Mixed prompt (a code task plus its prose
+explanation), thinking off, averages of 3 runs per row. c=1 is one full answer; c≥2 is 300 s with every stream kept busy, so a
+finished request is replaced at once and its new prompt's prefill is part of the average.
+
+| concurrent requests | `mode: off` (K=5, = v4) tok/s | **`mode: dynamic`** tok/s | per stream (dynamic) | tokens per step (off → dynamic) |
+|---|---|---|---|---|
+| 1 | 52.7 | **55.0** | 55.0 | 3.60 → 3.72 |
+| 2 | 81.3 | **82.7** | 41.4 | 3.71 → 3.96 |
+| 4 | 120.0 | **120.0** | 30.0 | 3.84 → 4.07 |
+| 6 | 154.3 | **151.3** | 25.2 | 4.12 → 4.31 |
+| 8 | 182.0 | **181.0** | 22.6 | 4.27 → 4.59 |
+| 12 | 218.0 | **214.3** | 17.9 | 4.37 → 4.68 |
+
+**Single-stream peak: 86.4 tok/s** — the best 10-second window, while a thinking-on request writes its code. **Prefill:
+1,988 tok/s** on a 128k-token prompt, **first token in 0.71 s** on a 1k prompt. The KV pool is 830,582 tokens with `mode: off`
+(K=5) and 813,457 with `mode: dynamic` (K=6 graphs); the v4 and v3 ladders are in their tags (`git checkout v4`).
 
 ## Quality (measured on this model, thinking on)
 
@@ -164,7 +177,7 @@ Switching is comment one line, uncomment the other, `./run.sh`:
 
 | `model:` | what it is | on this kit |
 |---|---|---|
-| `myllmbox/Qwen3.8-Flash-Next-hibrid48` (default) | the base model, calibrated body, NVFP4 output head — every speed number above | v4: 73 tok/s at c=1 (82 peak), 288 at 16 streams |
+| `myllmbox/Qwen3.8-Flash-Next-hibrid48` (default) | the base model, calibrated body, NVFP4 output head — every speed number above | v5: 86 tok/s single-stream peak, 214–218 tok/s at 12 streams (mixed) |
 | `myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored` | OrcaRouter's abliterated (refusal-removed) body with the same head — **no guardrails**; research, red-teaming, private use behind your own moderation | same shapes, same n-gram table → same speed and the same table map; quality table above (IFEval 94.5, HumanEval 94.5, GSM8K 97.5, MMLU-Pro 82.9) |
 
 The uncensored repo is **gated**: open its Hugging Face page, accept the agreement, then `hf auth login` (or `export
