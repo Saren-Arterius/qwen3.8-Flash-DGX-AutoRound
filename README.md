@@ -8,12 +8,54 @@ body with the same output head, no refusals, no guardrails — gated, research /
 so the same speed. To switch: in `recipe.yaml` comment the active `model:` line and uncomment the other, then `./run.sh`.
 Details in [Which checkpoint](#which-checkpoint).
 
-One box, one model. **86 tok/s peak.** Single-stream averages: **70 tok/s code · 69 structured output · 44 long prose ·
-55 mixed.** An 830k-token KV pool, a four-minute boot, three commands. **New in v5: an opt-in dynamic draft depth — +12 to
-+19 % on long prose, faster on both phases of a thinking-on request, level on everything else**
-([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)).
+One box, one model, three commands. **v5.1 (preview): RecoverSSM + dynamic draft depth up to 7 by default, an
+877k-token KV pool, 322 tok/s peak at 16 streams, and an optional front proxy with a loop guard.**
 
-## Dynamic draft depth (v5, opt-in)
+## v5.1 (preview, 2026-10-02)
+
+Published early for anyone who wants to test it; the measurements still running are listed below. v5 stays available:
+`git checkout v5`.
+
+**New**
+
+1. **RecoverSSM** for the model's recurrent (GDN) layers and the PLE short conv — [vllm-project/vllm#58863](https://github.com/vllm-project/vllm/pull/58863)
+   by [@jschmied](https://github.com/jschmied), ported to 0.30. The drafts are verified from one saved state and only the
+   accepted tokens are replayed: faster steps, and no per-draft state copies, so a deeper draft costs no memory. Pool
+   **876,726 tokens** at depth 7 (v5: 813,457 at depth 6).
+2. **Dynamic draft depth is the default**, up to **7** (v5: opt-in, up to 6). Fixed K=5: `mtp_depth.mode: off` and the two
+   commented K=5 lines in `recipe.yaml`.
+3. **Optional front proxy** (`proxy:` section in `recipe.yaml`, absent = no proxy): keepalive pings during long prefill and
+   thinking, a generic loop guard (any phrase repeated, or `2222…` / `?!?!…` runs), your own pattern list, and optional
+   logging of every request and response to `cache/requests/`. A cut answer ends with `<stopped reason="repetition"/>` (or
+   `reason="pattern"`) and frees the seat. See [Front proxy](#front-proxy-v51-optional).
+4. GB10 plan table for the model's small decode GEMMs, **off by default** (`MBX_SKINNY_GEMM_SM12X: "1"` in `env:`): faster
+   kernels, neutral end to end on one Spark.
+
+**Measured so far** (one DGX Spark, image v5.1, the shipped `recipe.yaml`, one `bench/full.py` run)
+
+| | v5.1 |
+|---|---|
+| thinking-on request (pasture), c=1 | **61.2** tok/s average · **86.2** peak |
+| structured output (JSON schema), c=1 | **73.1** |
+| long prose (7,000-word story), c=1 | **44.4** |
+| peak at c=1 / 2 / 4 / 8 / 16 (thinking off) | **75 / 112 / 167 / 236 / 322** |
+| average at c=1 / 2 / 4 / 8 / 16 (thinking off) | 59 / 84 / 128 / 197 / 282 |
+| prefill, 128k-token prompt | **2,053** tok/s |
+| first token, 1k prompt | **0.68** s |
+| KV pool | **876,726** tokens |
+
+Against v5 on the same box (mixed prompt, averages): +2 to +8 % at one stream, +11 to +16 % at 12 streams.
+
+**Still being measured**
+
+| what | status |
+|---|---|
+| full v5 vs v5.1 tables per prompt (mixed, code, structured, prose) at c=1 … 12 | running |
+| quality gate (4 pasture + 4 fish renders) | queued |
+| front proxy on multi-day agent workloads (loop guard hit rate) | running |
+| memory headroom at 16 streams (min ~1G available at 27G KV; 26G may become the default) | open |
+
+## Dynamic draft depth
 
 **How the dynamic depth works.** Speculative decoding drafts several tokens ahead and the model checks them in one step; how
 many of them survive depends on what is being written. Long prose keeps about the first three, code and JSON often all six. A
@@ -59,12 +101,9 @@ value of each row is bold; the mixed prompt is in the table above.
 | fixed K=5 | **69.7** | 103.7 | 149.3 | **178.3** | **203.7** | 232.7 |
 | **v5 (dynamic)** | 69.3 | **105.7** | **150.0** | 178.0 | 201.7 | **233.3** |
 
-**To turn it on**, in `recipe.yaml`:
-
-1. `mtp_depth.mode: dynamic`,
-2. swap in the two commented lines next to `speculative-config` and `compilation-config` (`num_speculative_tokens: 6` and
-   its capture sizes),
-3. `./run.sh`.
+**On by default since v5.1** (deepest depth 7; the tables above are v5, deepest 6). **Fixed K=5 instead**, in
+`recipe.yaml`: `mtp_depth.mode: off` and swap in the two commented K=5 lines next to `speculative-config` and
+`compilation-config`.
 
 **Knobs** (`mtp_depth` in `recipe.yaml`; `run.sh` writes them to `cache/mbx-depth.json`, and the serve re-reads that file
 while it runs — edit it to change them live):
@@ -77,7 +116,24 @@ while it runs — edit it to change them live):
 | `demote` | [25, 15] | −1 / −2 depth when below this % |
 | `log` | false | `true` = one log line per decision: depth before → after and the measured rate |
 
-The deepest depth is `num_speculative_tokens`. For 7, add the multiples of 8 (8 × 1 … 8 × seats) to the capture sizes.
+The deepest depth is `num_speculative_tokens`; the capture sizes must cover every depth × seats (the shipped list covers
+3 … 7 × 16).
+
+## Front proxy (v5.1, optional)
+
+Uncomment the `proxy:` section in `recipe.yaml`. `run.sh` then starts a second container (`qwen38-flash-next-proxy`) on the
+public port and moves vLLM to `127.0.0.1:<port+1>`; `./stop.sh` removes both.
+
+| key | default | what it does |
+|---|---|---|
+| `keepalive` | 30 | seconds between SSE pings while the model is silent (long prefill, long thinking) |
+| `loop_guard` | on | any phrase of 3–`loop_period` chars repeated `loop_repeats` times in a row, or a `size`-char 2-char run |
+| `size` / `loop_period` / `loop_repeats` | 12 / 64 / 8 | loop guard thresholds |
+| `loop_fields` | `reasoning_content,reasoning` | where both guards look; add `content` to watch the answer too |
+| `pattern_guard` | off | your strings, one per line in `cache/<patterns_file>`; a hit at `pattern_count` appearances |
+| `stop` | false | false = log hits to `cache/logs/`; true = also end the answer with `<stopped reason="…"/>` and free the seat |
+| `log_all` | off | every request + full response → `cache/requests/` (holds your users' prompts and answers) |
+| `token` | — | optional Bearer token for the API |
 
 ## Measured performance (v5, one DGX Spark, `vm.compaction_proactiveness=0`)
 
@@ -120,9 +176,12 @@ often. Published leaderboard numbers use other prompts, few-shot counts and full
 
 ## What changed
 
+**v5.1 (2026-10-02, preview): RecoverSSM, dynamic depth up to 7 by default, optional front proxy.** See
+[v5.1](#v51-preview-2026-10-02). v5 stays available: `git checkout v5`.
+
 **v5 (2026-10-01): dynamic draft depth, opt-in.** Per-request draft depth from measured acceptance, live-tunable knobs,
 +12 to +19 % on long prose at every concurrency, level on mixed text, JSON and code
-([Dynamic draft depth](#dynamic-draft-depth-v5-opt-in)). With `mode: off` (the default) the serve is v4. v4 stays available:
+([Dynamic draft depth](#dynamic-draft-depth)). With `mode: off` (the default) the serve is v4. v4 stays available:
 `git checkout v4`.
 
 **v4 (2026-09-25): vLLM 0.30, five sampled draft tokens, an 830k-token pool and 16 seats.**
@@ -177,7 +236,7 @@ Switching is comment one line, uncomment the other, `./run.sh`:
 
 | `model:` | what it is | on this kit |
 |---|---|---|
-| `myllmbox/Qwen3.8-Flash-Next-hibrid48` (default) | the base model, calibrated body, NVFP4 output head — every speed number above | v5: 86 tok/s single-stream peak, 214–218 tok/s at 12 streams (mixed) |
+| `myllmbox/Qwen3.8-Flash-Next-hibrid48` (default) | the base model, calibrated body, NVFP4 output head — every speed number above | v5.1: 86 tok/s single-stream peak, 322 tok/s peak at 16 streams |
 | `myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored` | OrcaRouter's abliterated (refusal-removed) body with the same head — **no guardrails**; research, red-teaming, private use behind your own moderation | same shapes, same n-gram table → same speed and the same table map; quality table above (IFEval 94.5, HumanEval 94.5, GSM8K 97.5, MMLU-Pro 82.9) |
 
 The uncensored repo is **gated**: open its Hugging Face page, accept the agreement, then `hf auth login` (or `export
@@ -197,8 +256,8 @@ what a user may do:
 - **evicts its own checkpoint files from the page cache** before launch (`dd iflag=nocache`, no privileges),
 - the weights load with `fastsafetensors`, and the image drops each shard from the page cache once it is consumed.
 
-Measured on this kit: ~5.7G available at one stream, 2.8–2.9G at 16 streams. If you run other things on the box, set
-`kv-cache-memory` to 26G (~800k tokens).
+Measured on v5.1: ~1G available at its lowest during a 16-stream run. If you run other things on the box, set
+`kv-cache-memory` to 26G (~845k tokens).
 
 One thing you *can* do, with root, and it is worth ~10 % on a serve that runs this close to the memory edge:
 
@@ -213,12 +272,13 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 
 ## Tuning (recipe.yaml)
 
-- **`kv-cache-memory`** (bytes): 27G bf16 = 830,582 tokens; 26G ≈ 800k with more headroom.
-- **`max-num-seqs`** 16: each running request holds ~36k tokens of pool for the model's recurrent state regardless of length,
-  so 16 seats leave ~250k tokens of shared context; fewer seats = more context each.
-- **`speculative-config`** K=5 with sampled drafts and block verification. K=4 (`num_speculative_tokens: 4`, capture sizes in
-  multiples of 5 up to seats × 5, and remove `block-size`) measured 2–8 % slower up to 6 streams and equal at 8.
-- **`compilation-config`**: the capture sizes are multiples of K+1 (6) up to seats × 6 = 96; shorten them only together with
+- **`kv-cache-memory`** (bytes): 27G bf16 = 876,726 tokens; 26G for more headroom.
+- **`max-num-seqs`** 16: with RecoverSSM each request holds one recurrent state (no per-draft copies); 16 streams use ~43 % of
+  the pool.
+- **`speculative-config`** up to 7 sampled draft tokens with block verification, depth chosen per request
+  (`mtp_depth`). Fixed K=5: the commented line.
+- **`use-replayssm: true`**: RecoverSSM. Remove it for the stock GDN verify path (more memory per seat, slower steps).
+- **`compilation-config`**: the capture sizes cover every draft depth × seats; shorten them only together with
   `max-num-seqs`, or the upper rungs decode without CUDA graphs.
 - **`block-size: 1632`**: required at K=5 — the boot stops with "QSA ring capacity 12 must divide the attention block size 1616"
   without it.
@@ -228,14 +288,15 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 - **`max-num-batched-tokens`**: also the image-input encoder budget — 8192 fits one max-resolution image (~4.1k tokens).
 - **`async-scheduling` on**. Thinking is ON by default (model native); disable per request with
   `"chat_template_kwargs": {"enable_thinking": false}` for max speed on structured output.
-- **`mtp_depth`**: dynamic draft depth, off by default — see [Dynamic draft depth](#dynamic-draft-depth-v5-opt-in).
+- **`mtp_depth`**: dynamic draft depth, on by default — see [Dynamic draft depth](#dynamic-draft-depth).
+- **`proxy`**: optional front proxy, absent by default — see [Front proxy](#front-proxy-v51-optional).
 - **`patches`** (server): optional vLLM patches from [`patches/`](patches/), off by default — e.g. `patches: hermes-chat`
   for the Hermes agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)). Applied at launch over the image's
   files; the image itself is unchanged.
 
 ## What's in the image
 
-`myllmbox/qwen38-flash-next-vllm:v5` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
+`myllmbox/qwen38-flash-next-vllm:v5.1` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
 edit that refuses to apply twice and fails the build if its target moved:
 
 1. **the NVFP4 n-gram table** on 0.30's embedding plugin — stock 0.30 refuses this checkpoint's table,
@@ -245,13 +306,17 @@ edit that refuses to apply twice and fails the build if its target moved:
 4. the loader's page-cache drop, the QSA pre-indexer rope clamp, and two inert knobs,
 5. **the table library** (`/opt/mbx/lib/libmbx_ple_nvme.so`, binary): prepares and serves the table map; it only accepts this
    release's n-gram table and stops with "invalid quant" otherwise,
-6. **draft-depth hooks** and the depth library (`/opt/mbx/lib/libmbx_mtp.so`, binary): idle with `mtp_depth.mode: off`.
+6. **draft-depth hooks** and the depth library (`/opt/mbx/lib/libmbx_mtp.so`, binary): idle with `mtp_depth.mode: off`,
+7. **RecoverSSM** ([vllm-project/vllm#58863](https://github.com/vllm-project/vllm/pull/58863), ported to 0.30, base files
+   sha256-checked), used with `use-replayssm`,
+8. **the front proxy** (`mbx_proxy`, compiled), started only with a `proxy:` section,
+9. a GB10 plan table for the small decode GEMMs, off unless `MBX_SKINNY_GEMM_SM12X=1`.
 
-Digest: `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`.
+Digest: `sha256:733f1a576e7e5a4192b0475ac4c3c53b5e5f27a182e92de0972ce88853ce1edd`.
 
-v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
-digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v4` /
-`v3` / `v2` / `v1`.
+v5 (`…-vllm:v5`, digest `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`), v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
+digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v5` /
+`v4` / `v3` / `v2` / `v1`.
 
 ## The full box
 

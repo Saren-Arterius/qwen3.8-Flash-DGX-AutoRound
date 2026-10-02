@@ -120,6 +120,21 @@ while IFS=$'\t' read -r k v; do
   esac
 done < <(rsection vllm)
 
+# optional front proxy (recipe.yaml `proxy:` section; absent = none, vLLM serves :$PORT itself): keepalive pings during long
+# prefills + a loop guard on the reasoning stream (logs to cache/logs/, stop: true also cuts the stream and aborts the seat)
+PROXY="$(rsection proxy | head -1)"
+if [ -n "$PROXY" ]; then
+  VPORT="$(rkey proxy upstream_port)"; VPORT="${VPORT:-$((PORT + 1))}"
+  PENV=(-e "MBX_PROXY_PORT=$PORT" -e "MBX_PROXY_UPSTREAM=http://127.0.0.1:$VPORT" -e "MBX_PROXY_LOGS=/cache/logs")
+  for k in keepalive loop_guard size loop_period loop_repeats loop_fields pattern_guard pattern_count log_all stop token; do
+    v="$(rkey proxy "$k")"; [ -n "$v" ] && PENV+=(-e "MBX_PROXY_$(echo "$k" | tr a-z A-Z)=$v")
+  done
+  PF="$(rkey proxy patterns_file)"; [ -n "$PF" ] && PENV+=(-e "MBX_PROXY_PATTERNS_FILE=/cache/$PF")
+  PUBLISH=(-p "127.0.0.1:$VPORT:8000")
+else
+  PUBLISH=(-p "$PORT:8000")
+fi
+
 # kernel page compaction — read-only check (the fix needs root → ./tune-host.sh). On a Spark the GPU's memory is
 # ordinary pages; the kernel's proactive compactor migrating them measured as 4-5 s stalls every ~37 s (~10 %).
 cp_now=$(cat /proc/sys/vm/compaction_proactiveness 2>/dev/null || echo "?")
@@ -127,7 +142,7 @@ if [ "$cp_now" != 0 ]; then
   echo "  ⚠ vm.compaction_proactiveness is $cp_now (want 0): expect ~10 % lower throughput and periodic 4-5 s stalls"
   echo "    under load. One-time fix, needs sudo, shows what it runs first:  ./tune-host.sh"
 fi
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker rm -f "$NAME" "$NAME-proxy" >/dev/null 2>&1 || true
 
 # optional vLLM patches (recipe.yaml server.patches → patches/<name>.patch; default none): the files a patch touches are
 # copied out of the image, patched and mounted read-only over the image's own copies. The image itself is never changed.
@@ -178,7 +193,7 @@ echo "· starting $NAME  ($IMAGE)  on :$PORT — healthy in ~4 min; the very fir
 docker run -d --name "$NAME" --gpus all --ipc=host \
   ${CPUSET:+--cpuset-cpus "$CPUSET"} \
   ${DOCKER_ARGS} \
-  -p "$PORT:8000" \
+  "${PUBLISH[@]}" \
   -v "$MODELS_ABS:/models" -v "$CACHE_ABS:/cache" \
   -v "$(readlink -f "$MODEL_DIR"):/models/$LOCAL_NAME" \
   "${PMOUNTS[@]}" \
@@ -187,6 +202,11 @@ docker run -d --name "$NAME" --gpus all --ipc=host \
   -e VLLM_CACHE_ROOT=/cache/vllm-cache \
   "${ENVS[@]}" \
   --entrypoint vllm "$IMAGE" serve "/models/$LOCAL_NAME" --port 8000 "${FLAGS[@]}" >/dev/null
+if [ -n "$PROXY" ]; then
+  docker run -d --name "$NAME-proxy" --network host -v "$CACHE_ABS:/cache" "${PENV[@]}" \
+    --entrypoint python3 "$IMAGE" -c "import mbx_proxy; mbx_proxy.main()" >/dev/null
+  echo "· proxy on :$PORT → vLLM on 127.0.0.1:$VPORT (keepalive + loop guard; logs → $CACHE_DIR/logs/)"
+fi
 
 echo "· streaming engine logs until healthy (Ctrl-C detaches; the container keeps booting)"
 docker logs -f "$NAME" 2>&1 &
