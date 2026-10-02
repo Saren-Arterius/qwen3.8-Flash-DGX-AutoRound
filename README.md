@@ -29,7 +29,9 @@ Published early for anyone who wants to test it; the measurements still running 
    logging of every request and response to `cache/requests/`. A cut answer ends with `<stopped reason="repetition"/>` (or
    `reason="pattern"`) and frees the seat. See [Front proxy](#front-proxy-v51-optional).
 4. GB10 plan table for the model's small decode GEMMs, **off by default** (`MBX_SKINNY_GEMM_SM12X: "1"` in `env:`): faster
-   kernels, neutral end to end on one Spark.
+   kernels, neutral end to end on one Spark. Found and first tuned for two Sparks by
+   [@sethforprivacy](https://github.com/sethforprivacy) ([vllm-project/vllm#59605](https://github.com/vllm-project/vllm/issues/59605));
+   the table here is tuned for one.
 
 **Measured so far** (one DGX Spark, image v5.1, the shipped `recipe.yaml`, one `bench/full.py` run)
 
@@ -310,7 +312,8 @@ edit that refuses to apply twice and fails the build if its target moved:
 7. **RecoverSSM** ([vllm-project/vllm#58863](https://github.com/vllm-project/vllm/pull/58863), ported to 0.30, base files
    sha256-checked), used with `use-replayssm`,
 8. **the front proxy** (`mbx_proxy`, compiled), started only with a `proxy:` section,
-9. a GB10 plan table for the small decode GEMMs, off unless `MBX_SKINNY_GEMM_SM12X=1`.
+9. a GB10 plan table for the small decode GEMMs (after [@sethforprivacy](https://github.com/sethforprivacy)'s TP=2 table), off unless
+   `MBX_SKINNY_GEMM_SM12X=1`.
 
 Digest: `sha256:733f1a576e7e5a4192b0475ac4c3c53b5e5f27a182e92de0972ce88853ce1edd`.
 
