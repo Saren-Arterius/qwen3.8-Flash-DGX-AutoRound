@@ -26,6 +26,19 @@ RUN cp ${PLE} ${PLE}.orig \
  && printf '\n\n# --- qwen38-flash-dgx: serve the PLE n-gram table from disk (VLLM_PLE_MMAP=1) ---\nfrom vllm_ple_mmap import apply as _ple_mmap_apply\n_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)\n' >> ${PLE} \
  && python3 -c "import ast; ast.parse(open('${PLE}').read()); print('ple_layer.py patched OK')"
 
+# --- magi3: PLE table over RDMA (VLLM_PLE_RDMA=<host:port>) — ported from magi ---
+# One-sided READs against the table daemon (src/ple_rdma/, server runs on wtako);
+# RDMA mode is exclusive (no mmap, failed READs retry/stall). Container must run
+# with --device /dev/infiniband --ulimit memlock=-1:-1. No apt-get: the parent
+# image already ships gcc + libibverbs-dev. vllm_ple_mmap.py above already
+# contains the rdma_ep branch.
+COPY src/ple_rdma/ple_rdma.c /tmp/ple_rdma.c
+RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs \
+      -o ${SP}/libple_rdma.so && rm /tmp/ple_rdma.c \
+ && python3 -c "import ctypes; ctypes.CDLL('${SP}/libple_rdma.so'); print('libple_rdma.so OK')"
+COPY src/vllm_ple_rdma.py ${SP}/vllm_ple_rdma.py
+RUN python3 -c "import ast; ast.parse(open('${SP}/vllm_ple_rdma.py').read()); print('vllm_ple_rdma.py OK')"
+
 # spark-fla-shmem (from Saren's 122B recipe): sm121 reports 99 KiB shared mem
 # (= ADA, where big tiles fit) but the FLA gate demands 100 KiB -> the 36 GDN
 # layers run small Triton tiles. Lower the gate so GB10 gets big tiles.

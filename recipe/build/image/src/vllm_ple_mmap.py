@@ -50,6 +50,15 @@ Knobs (env):
                              (prefill: the per-row Python loop of the fast path
                              stops paying off once tasks are big enough to
                              amortise the pool).
+  VLLM_PLE_RDMA=<host:port>  serve rows over RDMA from ple_rdma_server.py
+                             (exclusive: no mmap table is opened, failed READs
+                             retry/stall, never fall back). Needs the image's
+                             libple_rdma.so + vllm_ple_rdma.py. Optional:
+                             VLLM_PLE_RDMA_DEV / _GID, VLLM_PLE_RDMA_PREFETCH=1
+                             (default on). With VLLM_PLE_RDMA set the
+                             FAST_PATH / PREWARM / PREFETCH mmap knobs are
+                             ignored. Keep VLLM_PLE_MMAP_PREFETCH unset to avoid
+                             running the batch-assembly hash twice.
 
 Install: the Dockerfile copies this file next to vllm and appends
 ``_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)`` to the end of
@@ -739,11 +748,12 @@ def _stats_log() -> None:
     logger.info(
         "PLE mmap stats (last %.0fs): %d ops, op %.0f ms total (%.2f ms/op), "
         "gather %.0f ms total (%.2f ms/op), %d rows, %.1f MiB read, "
-        "prefetch hit %d miss %d, fast %d",
+        "prefetch hit %d miss %d, fast %d, rdma prefetch hit %d miss %d",
         elapsed, s["calls"], s["op_ms"], s["op_ms"] / s["calls"],
         s["gather_ms"], s["gather_ms"] / s["calls"],
         s["rows"], s["bytes"] / 2**20,
         s.get("pf_hit", 0), s.get("pf_miss", 0), s.get("fast", 0),
+        s.get("rdma_pf_hit", 0), s.get("rdma_pf_miss", 0),
     )
     s.update(calls=0, op_ms=0.0, gather_ms=0.0, rows=0, bytes=0, fast=0)
 
@@ -861,10 +871,19 @@ def apply(cls: type) -> None:
     def _setup_table(self) -> None:
         if self.ngram_embedding.table is not None:
             return
+        rdma_ep = os.environ.get("VLLM_PLE_RDMA")
         # VLLM_PLE_MMAP_DIR: serve the table from a different directory than the
         # checkpoint (e.g. an FP8 copy of the table on local NVMe).
         model_path = os.environ.get("VLLM_PLE_MMAP_DIR") or self._ple_mmap_model_path
-        if not model_path or not os.path.isdir(model_path):
+        have_dir = bool(model_path) and os.path.isdir(model_path)
+        if rdma_ep:
+            # RDMA mode is exclusive: no MmapPleTable is ever constructed and
+            # no table file is opened/mmapped — rows can only come from the
+            # server (failed READs retry+stall there, never fall back here).
+            if os.environ.get("VLLM_PLE_MMAP_DIR"):
+                logger.warning("PLE rdma: ignoring VLLM_PLE_MMAP_DIR (RDMA is exclusive)")
+            have_dir = False
+        if not have_dir and not rdma_ep:
             raise RuntimeError(
                 f"PLE mmap: table path {model_path!r} is not a local directory; "
                 "point --model at the downloaded snapshot or set VLLM_PLE_MMAP_DIR"
@@ -876,7 +895,8 @@ def apply(cls: type) -> None:
         parts = int(self.split_ngram_parts)
         vocab = int(self.ngram_embedding.org_vocab_size)
         shard_size = math.ceil(vocab / parts)
-        if True:  # (indentation kept to minimize the diff)
+        mmap_table = None
+        if have_dir:
             shards, dtype_str, scale_entry = _find_shards(model_path, layer_idx)
             if not shards:
                 raise RuntimeError(f"PLE mmap: no shard tensors for layer {layer_idx} under {model_path}")
@@ -904,12 +924,30 @@ def apply(cls: type) -> None:
                 workers=_env_int("VLLM_PLE_MMAP_WORKERS", 32),
                 chunk=_env_int("VLLM_PLE_MMAP_CHUNK", 2048),
             )
-        table = mmap_table
-        if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
-            logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
-            table.prewarm()
-        if _env_int("VLLM_PLE_MMAP_PREFETCH", 0):
-            table = PrefetchingMmapTable(mmap_table)
+        if rdma_ep:
+            # RDMA-only: geometry is fixed fp8 rows of head_dim bytes; the
+            # global scale comes from the server hello.
+            from vllm_ple_rdma import RdmaPleTable
+
+            table = RdmaPleTable(rdma_ep, shard_size, int(self.head_dim),
+                                 torch.float8_e4m3fn, vocab)
+            if not hasattr(self, "_offload_weight_scale"):
+                scale = table.client.remote.get("weight_scale")
+                if scale is None:
+                    raise RuntimeError("PLE rdma: no weight_scale from server or checkpoint")
+                self.register_buffer(
+                    "_offload_weight_scale",
+                    torch.tensor(scale, dtype=torch.bfloat16).to(
+                        torch.accelerator.current_accelerator()),
+                    persistent=False,
+                )
+        else:
+            table = mmap_table
+            if _env_int("VLLM_PLE_MMAP_PREWARM", 0):
+                logger.info("PLE mmap: prewarming page cache (%.1f GiB)...", table.rows_total * table.row_bytes / 2**30)
+                table.prewarm()
+            if _env_int("VLLM_PLE_MMAP_PREFETCH", 0):
+                table = PrefetchingMmapTable(mmap_table)
         self.ngram_embedding.table = table
         logger.info(
             "PLE table ready: layer %d, %d rows x %d B, backend %s",

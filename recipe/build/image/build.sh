@@ -34,11 +34,15 @@ done
 
 # Pinned release inputs: ten exact clone copies and one comment-sanitized copy.
 # Later image patches are checked by their Dockerfile anchors and CPU gates.
+# magi3: vllm_ple_mmap.py hash updated for the RDMA port (rdma_ep branch +
+# stats union + docstring; FAST_PATH and rendezvous anchors preserved). This
+# intentionally forks the measured lineage — iter6d+magi3 is a new measurement,
+# not upstream v16b.
 if ! (cd "$here" && md5sum --check --status <<'MD5'
 dc14044033fb18da264967699289c547  src/draft_vocab_common.py
 c862ebecc496cdd4587461079c3d6f9b  src/vllm_mtp_draft_vocab.py
 c9f6b5ad6558f185a412e90a0f96cc19  src/patch_short_conv_async_h2d.py
-60797774c6cf7803d6fabaf2ae8d6151  src/vllm_ple_mmap.py
+9ef33a82162b0e6aa37b4ad550e14501  src/vllm_ple_mmap.py
 9bb9d0cebc756fc6be7daab184579c09  src/vllm_fp8_hybrid.py
 d4cfbfd3f30768d45e2b3a87e5b95b05  src/patch_never_evict.py
 3edc482ca8f18e0d94a7ad82d23db867  src/mamba_utils_guarded.py

@@ -21,6 +21,13 @@ PLE_MADV_RANDOM='1'
 PLE_FAST_ROWS='16'
 PLE_CHUNK='8'
 PLE_STATS_SEC=''
+# magi3: PLE rows over RDMA (VLLM_PLE_RDMA). Empty = mmap from TABLE_DIR (stock
+# fork path). Set PLE_RDMA=<host:port> + TABLE_DIR='' for exclusive RDMA mode
+# (no local table, failed READs retry/stall). Server: ple_rdma_server.py on wtako.
+PLE_RDMA=''
+PLE_RDMA_DEV='roceP2p1s0f0'
+PLE_RDMA_GID='auto'
+PLE_RDMA_PREFETCH='1'
 SPEC_EXTRA='{"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
 HIT_DEBUG='0'
 STEP_PROFILE='0'

@@ -1,8 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 FROM qwen38-flash-dgx:iter6c-20260909
 
+ARG SP=/usr/local/lib/python3.12/dist-packages
+
 COPY src/patch_block_drop.py /tmp/patch_block_drop.py
 RUN python3 /tmp/patch_block_drop.py && rm /tmp/patch_block_drop.py
 
 COPY src/patch_r7_logger.py /tmp/patch_r7_logger.py
 RUN python3 /tmp/patch_r7_logger.py && rm /tmp/patch_r7_logger.py
+
+# --- magi3: PLE table over RDMA (VLLM_PLE_RDMA=<host:port>) — ported from magi ---
+# One-sided READs against the table daemon (src/ple_rdma/, server runs on wtako);
+# RDMA mode is exclusive (no mmap, failed READs retry/stall). Container must run
+# with --device /dev/infiniband --ulimit memlock=-1:-1. No apt-get here: the
+# parent image already ships gcc + libibverbs-dev, so this stays --network none
+# clean. vllm_ple_mmap.py (iter6c layer) already contains the rdma_ep branch.
+COPY src/ple_rdma/ple_rdma.c /tmp/ple_rdma.c
+RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs \
+      -o ${SP}/libple_rdma.so && rm /tmp/ple_rdma.c \
+ && python3 -c "import ctypes; ctypes.CDLL('${SP}/libple_rdma.so'); print('libple_rdma.so OK')"
+COPY src/vllm_ple_rdma.py ${SP}/vllm_ple_rdma.py
+RUN python3 -c "import ast; ast.parse(open('${SP}/vllm_ple_rdma.py').read()); print('vllm_ple_rdma.py OK')"

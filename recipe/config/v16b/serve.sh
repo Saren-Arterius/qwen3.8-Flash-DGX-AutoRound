@@ -5,7 +5,13 @@ set -euo pipefail
 NAME="${NAME:-qwen38-flash}"
 IMAGE="${IMAGE:-qwen38-flash-dgx}"
 MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32}"
-TABLE_DIR="${TABLE_DIR:-/models/ple-table-fp8}"
+# NOTE "-" not ":-": TABLE_DIR="" is meaningful (no local table; PLE rows
+# come via VLLM_PLE_RDMA instead), only an UNSET var gets the default.
+TABLE_DIR="${TABLE_DIR-/models/ple-table-fp8}"
+PLE_RDMA="${PLE_RDMA:-}"
+PLE_RDMA_DEV="${PLE_RDMA_DEV:-roceP2p1s0f0}"
+PLE_RDMA_GID="${PLE_RDMA_GID:-auto}"
+PLE_RDMA_PREFETCH="${PLE_RDMA_PREFETCH:-1}"
 PORT="${PORT:-18300}"
 CTX="${CTX:-262144}"
 SEQS="${SEQS:-8}"
@@ -88,18 +94,32 @@ if [ -n "${KEEP_DRAFT_BLOCKS:-}" ];  then IT6_ARGS+=(-e "VLLM_KEEP_DRAFT_BLOCKS=
 
 # The four flag strings below intentionally expand into separate argv words;
 # the promoted env supplies fixed, whitespace-separated flags.
+# TABLE_DIR="": no local table mount — PLE rows come from the RDMA daemon
+# (VLLM_PLE_RDMA) instead of a mmapped directory. RDMA mode is exclusive.
+TABLE_ARGS=()
+if [ -n "${TABLE_DIR:-}" ]; then
+  TABLE_ARGS=(-v "$TABLE_DIR:/ple-table:ro" -e VLLM_PLE_MMAP_DIR=/ple-table)
+fi
+RDMA_ARGS=()
+IB_ARGS=()
+if [ -n "${PLE_RDMA:-}" ]; then
+  RDMA_ARGS=(-e "VLLM_PLE_RDMA=$PLE_RDMA" -e "VLLM_PLE_RDMA_DEV=$PLE_RDMA_DEV"
+             -e "VLLM_PLE_RDMA_GID=$PLE_RDMA_GID" -e "VLLM_PLE_RDMA_PREFETCH=$PLE_RDMA_PREFETCH")
+  IB_ARGS=(--device /dev/infiniband --ulimit memlock=-1:-1)
+fi
 # shellcheck disable=SC2206
 DOCKER_RUN=(docker run -d --name "$NAME" --restart unless-stopped \
   --gpus all --ipc=host --shm-size 16g -p "${PORT}:8000" \
-  -v "$MODEL_DIR:/model:ro" -v "$TABLE_DIR:/ple-table:ro" \
+  "${IB_ARGS[@]}" \
+  -v "$MODEL_DIR:/model:ro" "${TABLE_ARGS[@]}" \
   -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS="${WORKERS:-32}" -e VLLM_PLE_MMAP_PREWARM="$PREWARM" -e VLLM_PLE_MMAP_PREFETCH="${PLE_PREFETCH:-0}" \
   -e VLLM_PLE_MMAP_MADV_RANDOM="${PLE_MADV_RANDOM:-0}" \
   "${PLE_ARGS[@]}" \
+  "${RDMA_ARGS[@]}" \
   "${DV_ARGS[@]}" \
   "${IT6_ARGS[@]}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
-  -e VLLM_PLE_MMAP_DIR=/ple-table \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
   -e VLLM_FP8_HYBRID="${FP8_HYBRID:-1}" \
   -e VLLM_USE_DEEP_GEMM=0 \
