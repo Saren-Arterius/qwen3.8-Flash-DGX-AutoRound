@@ -28,7 +28,11 @@ export PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
 # magi production: full draft head (DRAFT_VOCAB=0, CJK acceptance over the
 # 65k cut) + T80 dense drafter on (takes effect once the T80 dir exists).
 export DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
-export T80_DIR="${T80_DIR:-/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32}"
+export T80_DIR="${T80_DIR:-/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4}"
+export KV_BYTES="${KV_BYTES:-24g}"
+export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
+export SEQS="${SEQS:-16}"
+
 # Fallback bridge: while the T80 dir is absent, serve magi's mtpint4 hybrid
 # (same family; boots this stack, minus the dense drafter).
 # TEMPORARY bridge: the T80 dir isn't built yet — serve magi's mtpint4 hybrid
