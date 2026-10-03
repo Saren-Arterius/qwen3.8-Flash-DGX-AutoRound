@@ -7,6 +7,10 @@ NAME='qwen38-flash'
 T80='1'
 HYBRID_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
 T80_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
+# magi3: 65k draft-vocab cut (option 1 of 2; T80 above is the other).
+# 0 = full head: full CJK draft acceptance, ~458 MiB extra head read per
+# draft pass. Shipped default is 1 (cut on); magi production runs 0.
+DRAFT_VOCAB='0'
 TABLE_DIR="$HOME/models/ple-table-fp8"
 PORT='8000'
 SERVED_NAME='qwen'

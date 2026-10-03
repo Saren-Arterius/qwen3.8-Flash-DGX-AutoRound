@@ -25,6 +25,9 @@ export SERVED_NAME="${SERVED_NAME:-qwen}"
 # explicit TABLE_DIR still selects mmap mode).
 export TABLE_DIR="${TABLE_DIR:-}"
 export PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
+# magi production: full draft head (DRAFT_VOCAB=0, CJK acceptance over the
+# 65k cut) + T80 dense drafter on (takes effect once the T80 dir exists).
+export DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
 # TEMPORARY bridge: the T80 dir isn't built yet — serve magi's mtpint4 hybrid
 # (same family; boots this stack, minus the dense drafter) until
 # ~/models/...-hybrid-mtpdense-g32 exists, when the T80 toggle default takes

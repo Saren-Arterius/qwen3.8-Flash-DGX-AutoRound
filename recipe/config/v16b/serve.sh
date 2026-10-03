@@ -66,7 +66,17 @@ fi
 
 PLE_FAST_PATH="${PLE_FAST_PATH:-1}"
 PLE_FAST_MAX_ROWS="${PLE_FAST_MAX_ROWS:-262144}"
-MTP_DRAFT_VOCAB="${MTP_DRAFT_VOCAB:-${HOME}/.cache/qwen38-v16b/draft-vocab-ids-K65536.txt}"
+# magi3: 65k draft-vocab cut toggle (option 1 of 2; T80 is the other).
+# DRAFT_VOCAB=1 (default, shipped) scores only the 65,536-id slice: cheaper
+# draft passes, but CJK acceptance/tg drops. DRAFT_VOCAB=0 scores the full
+# head. An explicit MTP_DRAFT_VOCAB path is honoured only when the cut is on
+# (use it to supply a custom id set).
+DRAFT_VOCAB="${DRAFT_VOCAB:-1}"
+if [ "$DRAFT_VOCAB" = 0 ]; then
+  MTP_DRAFT_VOCAB=""
+elif [ -z "${MTP_DRAFT_VOCAB:-}" ]; then
+  MTP_DRAFT_VOCAB="${HOME}/.cache/qwen38-v16b/draft-vocab-ids-K65536.txt"
+fi
 DRAFTER_EXPERTS_FP8="${DRAFTER_EXPERTS_FP8:-1}"
 
 PLE_ARGS=()
