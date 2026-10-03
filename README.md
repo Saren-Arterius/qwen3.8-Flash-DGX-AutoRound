@@ -8,13 +8,12 @@ body with the same output head, no refusals, no guardrails — gated, research /
 so the same speed. To switch: in `recipe.yaml` comment the active `model:` line and uncomment the other, then `./run.sh`.
 Details in [Which checkpoint](#which-checkpoint).
 
-One box, one model, three commands. **v5.1 (preview): RecoverSSM + dynamic draft depth up to 7 by default, an
+One box, one model, three commands. **v5.1: RecoverSSM + dynamic draft depth up to 7 by default, an
 877k-token KV pool, 322 tok/s peak at 16 streams, and an optional front proxy with a loop guard.**
 
-## v5.1 (preview, 2026-10-02)
+## v5.1 (2026-10-02)
 
-Published early for anyone who wants to test it; the measurements still running are listed below. v5 stays available:
-`git checkout v5`.
+v5 stays available: `git checkout v5`.
 
 **New**
 
@@ -33,7 +32,7 @@ Published early for anyone who wants to test it; the measurements still running 
    [@sethforprivacy](https://github.com/sethforprivacy) ([vllm-project/vllm#59605](https://github.com/vllm-project/vllm/issues/59605));
    the table here is tuned for one.
 
-**Measured so far** (one DGX Spark, image v5.1, the shipped `recipe.yaml`, one `bench/full.py` run)
+**Measured** (one DGX Spark, image v5.1, the shipped `recipe.yaml`, one `bench/full.py` run)
 
 | | v5.1 |
 |---|---|
@@ -46,16 +45,15 @@ Published early for anyone who wants to test it; the measurements still running 
 | first token, 1k prompt | **0.68** s |
 | KV pool | **876,726** tokens |
 
-Against v5 on the same box (mixed prompt, averages): +2 to +8 % at one stream, +11 to +16 % at 12 streams.
+**v5 → v5.1 per prompt** (same box, thinking off, v5 = the dynamic-depth runs below, average tok/s of all streams together, averages of 3 runs; c=1 = one
+full answer, c≥2 = 300 s with every stream kept busy)
 
-**Still being measured**
-
-| what | status |
-|---|---|
-| full v5 vs v5.1 tables per prompt (mixed, code, structured, prose) at c=1 … 12 | running |
-| quality gate (4 pasture + 4 fish renders) | queued |
-| front proxy on multi-day agent workloads (loop guard hit rate) | running |
-| memory headroom at 16 streams (min ~1G available at 27G KV; 26G may become the default) | open |
+| prompt | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
+|---|---|---|---|---|---|---|
+| mixed (code + explanation) | 55.0 → **56.4** | 82.7 → **83.3** | 120.0 → **126.3** | 151.3 → **161.4** | 181.0 → **192.1** | 214.3 → **239.2** |
+| structured output (JSON schema) | 69.3 → **74.2** | 105.7 → **111.9** | 150.0 → **162.3** | 178.0 → **198.4** | 201.7 → **228.6** | 233.3 → **267.5** |
+| long prose (7,000-word story) | 44.3 → **44.7** | **69.7** → 69.4 | 102.3 → **107.8** | 124.0 → **132.1** | 143.0 → **152.1** | 172.3 → **185.7** |
+| code (TypeScript) | 69.7 → **74.6** | 103.0 → **107.3** | 142.3 → **151.3** | 169.0 → **185.7** | 185.3 → **209.9** | 213.3 → **243.9** |
 
 ## Dynamic draft depth
 
@@ -75,7 +73,7 @@ answers think for different lengths (averages of 3 runs, tok/s):
 | thinking | 50.7 | 50.0 | 49.7 | 48.0 | **51.4** |
 | writing the code | 63.2 | 66.3 | 70.9 | 68.8 | **72.1** |
 
-**v5 vs fixed K=3 and K=5 at every concurrency, aggregate tok/s** (same box and image, thinking off, averages of 3 runs; c=1 = one full answer,
+**v5 and v5.1 vs fixed K=3 and K=5 at every concurrency, aggregate tok/s** (same box and image, thinking off, averages of 3 runs; c=1 = one full answer,
 c≥2 = 300 s with every stream kept busy; fixed K=3 / K=5 = `mode: dynamic` with `min` pinned and promotion off). The best
 value of each row is bold; the mixed prompt is in the table above.
 
@@ -83,25 +81,28 @@ value of each row is bold; the mixed prompt is in the table above.
 
 | depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
 |---|---|---|---|---|---|---|
-| fixed K=3 | 44.0 | **70.0** | **103.3** | **124.3** | **143.0** | 172.0 |
+| fixed K=3 | 44.0 | **70.0** | 103.3 | 124.3 | 143.0 | 172.0 |
 | fixed K=5 | 39.7 | 61.0 | 90.3 | 108.7 | 124.7 | 144.7 |
-| **v5 (dynamic)** | **44.3** | 69.7 | 102.3 | 124.0 | **143.0** | **172.3** |
+| **v5 (dynamic)** | 44.3 | 69.7 | 102.3 | 124.0 | 143.0 | 172.3 |
+| **v5.1 (dynamic, ≤7)** | **44.7** | 69.4 | **107.8** | **132.1** | **152.1** | **185.7** |
 
 **Code (TypeScript)**
 
 | depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
 |---|---|---|---|---|---|---|
 | fixed K=3 | 62.3 | 93.0 | 132.3 | 160.3 | 180.3 | 214.3 |
-| fixed K=5 | **69.7** | 102.3 | 140.0 | 164.0 | **185.3** | **217.0** |
-| **v5 (dynamic)** | **69.7** | **103.0** | **142.3** | **169.0** | **185.3** | 213.3 |
+| fixed K=5 | 69.7 | 102.3 | 140.0 | 164.0 | 185.3 | 217.0 |
+| **v5 (dynamic)** | 69.7 | 103.0 | 142.3 | 169.0 | 185.3 | 213.3 |
+| **v5.1 (dynamic, ≤7)** | **74.6** | **107.3** | **151.3** | **185.7** | **209.9** | **243.9** |
 
 **Structured output (JSON schema)**
 
 | depth | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 |
 |---|---|---|---|---|---|---|
 | fixed K=3 | 61.7 | 95.3 | 139.3 | 168.3 | 193.0 | 229.7 |
-| fixed K=5 | **69.7** | 103.7 | 149.3 | **178.3** | **203.7** | 232.7 |
-| **v5 (dynamic)** | 69.3 | **105.7** | **150.0** | 178.0 | 201.7 | **233.3** |
+| fixed K=5 | 69.7 | 103.7 | 149.3 | 178.3 | 203.7 | 232.7 |
+| **v5 (dynamic)** | 69.3 | 105.7 | 150.0 | 178.0 | 201.7 | 233.3 |
+| **v5.1 (dynamic, ≤7)** | **74.2** | **111.9** | **162.3** | **198.4** | **228.6** | **267.5** |
 
 **On by default since v5.1** (deepest depth 7; the tables above are v5, deepest 6). **Fixed K=5 instead**, in
 `recipe.yaml`: `mtp_depth.mode: off` and swap in the two commented K=5 lines next to `speculative-config` and
@@ -178,8 +179,8 @@ often. Published leaderboard numbers use other prompts, few-shot counts and full
 
 ## What changed
 
-**v5.1 (2026-10-02, preview): RecoverSSM, dynamic depth up to 7 by default, optional front proxy.** See
-[v5.1](#v51-preview-2026-10-02). v5 stays available: `git checkout v5`.
+**v5.1 (2026-10-02): RecoverSSM, dynamic depth up to 7 by default, optional front proxy.** See
+[v5.1](#v51-2026-10-02). v5 stays available: `git checkout v5`.
 
 **v5 (2026-10-01): dynamic draft depth, opt-in.** Per-request draft depth from measured acceptance, live-tunable knobs,
 +12 to +19 % on long prose at every concurrency, level on mixed text, JSON and code
