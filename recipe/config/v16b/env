@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 NAME='qwen38-flash'
-MODEL_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
+# magi3: T80 toggle (selection happens in serve.sh). 1 = serve the
+# dense-MTP g32 dir (promoted v16b); 0 = serve the base hybrid dir.
+# An explicit MODEL_DIR always wins. (Deviates from the shipped recipe;
+# this is the magi-v3 fork, a new measured lineage.)
+T80='1'
+HYBRID_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
+T80_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
 TABLE_DIR="$HOME/models/ple-table-fp8"
 PORT='8000'
 SERVED_NAME='qwen'

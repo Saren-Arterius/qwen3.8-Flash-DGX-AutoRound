@@ -4,7 +4,14 @@ set -euo pipefail
 
 NAME="${NAME:-qwen38-flash}"
 IMAGE="${IMAGE:-qwen38-flash-dgx}"
-MODEL_DIR="${MODEL_DIR:-/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32}"
+# magi3: T80 toggle. An explicit MODEL_DIR always wins; otherwise T80=1
+# (default) serves the dense-MTP g32 dir, T80=0 the base hybrid dir.
+T80="${T80:-1}"
+HYBRID_DIR="${HYBRID_DIR:-/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid}"
+T80_DIR="${T80_DIR:-/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32}"
+if [ -z "${MODEL_DIR:-}" ]; then
+  if [ "$T80" = 1 ]; then MODEL_DIR="$T80_DIR"; else MODEL_DIR="$HYBRID_DIR"; fi
+fi
 # NOTE "-" not ":-": TABLE_DIR="" is meaningful (no local table; PLE rows
 # come via VLLM_PLE_RDMA instead), only an UNSET var gets the default.
 TABLE_DIR="${TABLE_DIR-/models/ple-table-fp8}"
