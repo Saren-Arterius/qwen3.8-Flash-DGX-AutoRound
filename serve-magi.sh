@@ -29,7 +29,8 @@ export PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
 # 65k cut) + T80 dense drafter on (takes effect once the T80 dir exists).
 export DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
 export T80_DIR="${T80_DIR:-/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4}"
-export KV_BYTES="${KV_BYTES:-24g}"
+export KV_BYTES="${KV_BYTES:-20g}"
+export PREFIX_CACHE="${PREFIX_CACHE:-1}"
 export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
 export SEQS="${SEQS:-16}"
 
