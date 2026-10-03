@@ -144,6 +144,39 @@ AutoRound INT4 experts + FP8 side layers + INT8 output head
 | [`recipe/benchmarks/`](recipe/benchmarks/) | Stream-curve, agent-shaped and standalone decode benchmark scripts |
 | [`docs/`](docs/) | [Build](docs/BUILD.md), [configuration](docs/CONFIGURATION.md), [architecture](docs/ARCHITECTURE.md), [benchmarks](docs/BENCHMARKS.md), [evaluation](docs/EVALS.md), [changelog](docs/CHANGELOG.md) and [result tables](docs/results/) |
 
+## magi-v3 production fork
+
+This branch (`magi-v3`) is the recipe above **plus** the PLE-over-RDMA port
+from the `magi` line, serving production on a GB10 with wtako holding the
+table. Everything upstream still applies; the deltas are:
+
+- **PLE table over RDMA (exclusive).** `recipe/build/image/src/vllm_ple_rdma.py`
+  (+ `libple_rdma.so`, built in `Dockerfile.iter6d`) fetches rows with
+  one-sided READs from `ple-rdma-server` on wtako (`VLLM_PLE_RDMA`, default
+  `192.168.0.1:18515`). With it set, no table is mmapped locally, failed
+  READs retry/stall, and the mmap knobs (`PREWARM`, `PREFETCH`, `FAST_PATH`)
+  are ignored. Same hook architecture as the mmap patch (same class, same
+  `vllm::ple_mmap_lookup` op, same `prepare_inputs` prefetch pattern), so the
+  rendezvous anchors and CPU gates are unaffected.
+- **Two serving toggles.** `T80` (default 1: `...-hybrid-mtpdense-g32`, else
+  the base hybrid; explicit `MODEL_DIR` wins) and `DRAFT_VOCAB` (default 1:
+  the 65,536-id slice; `0` scores the full 248,320-id head — production runs
+  `0` for CJK draft acceptance at ~458 MiB extra head read per draft pass).
+- **Watchdog entrypoint.** `serve-magi.sh` (called by the supervisor's
+  `ram-client-ple.sh`) waits for `:18515`, pins the production image,
+  RDMA-exclusive flags, `DRAFT_VOCAB=0`, KV bytes and the never-evict pin
+  prompt, then execs the recipe serve script.
+- **Combined T80+int4 checkpoint.** Production serves
+  `...-hybrid-mtpdense-g32-mtpint4`: the T80 g32 sides plus magi's int4 g128
+  routed experts. Requires one routing fix in its `config.json`: an explicit
+  `+:.*\.mlp\.experts$` int4 rule ahead of T80's `-:.*\bmtp\..*` guard,
+  otherwise the experts fall into the unquantized path and the fp8 arm builds
+  the wrong parameters (`AttributeError: no parameter 'w2_qweight'`).
+
+The published benchmark numbers above are upstream v16b (mmap table, 65k
+cut). magi-v3 production differs (RDMA table, full head, combined
+checkpoint), so re-measure with `recipe/benchmarks/` before comparing.
+
 ## Credits and licenses
 
 The base recipe derives from [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound), Apache-2.0, copyright blazux. Thanks to the Qwen model authors and to the vLLM, Intel AutoRound and FlashInfer contributors. Model weights and downloaded datasets keep their own terms.
