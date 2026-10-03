@@ -5,8 +5,8 @@ NAME='qwen38-flash'
 # An explicit MODEL_DIR always wins. (Deviates from the shipped recipe;
 # this is the magi-v3 fork, a new measured lineage.)
 T80='1'
-HYBRID_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
-T80_DIR="$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
+HYBRID_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
+T80_DIR="/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32"
 # magi3: 65k draft-vocab cut (option 1 of 2; T80 above is the other).
 # 0 = full head: full CJK draft acceptance, ~458 MiB extra head read per
 # draft pass. Shipped default is 1 (cut on); magi production runs 0.

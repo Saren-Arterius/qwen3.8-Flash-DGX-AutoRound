@@ -28,11 +28,14 @@ export PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
 # magi production: full draft head (DRAFT_VOCAB=0, CJK acceptance over the
 # 65k cut) + T80 dense drafter on (takes effect once the T80 dir exists).
 export DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
+export T80_DIR="${T80_DIR:-/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32}"
+# Fallback bridge: while the T80 dir is absent, serve magi's mtpint4 hybrid
+# (same family; boots this stack, minus the dense drafter).
 # TEMPORARY bridge: the T80 dir isn't built yet — serve magi's mtpint4 hybrid
 # (same family; boots this stack, minus the dense drafter) until
-# ~/models/...-hybrid-mtpdense-g32 exists, when the T80 toggle default takes
+# $T80_DIR exists, when the T80 toggle default takes
 # over. TODO: delete this block after the T80 build lands.
-if [ -z "${MODEL_DIR:-}" ] && [ ! -d "$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32" ]; then
+if [ -z "${MODEL_DIR:-}" ] && [ ! -d "$T80_DIR" ]; then
   echo "serve-magi.sh: T80 dir absent, serving mtpint4 bridge checkpoint" >&2
   export MODEL_DIR=/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-mtpint4
 fi
