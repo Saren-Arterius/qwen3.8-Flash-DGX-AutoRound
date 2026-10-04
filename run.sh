@@ -215,6 +215,24 @@ trap 'kill "$LOGS" 2>/dev/null || true' EXIT INT TERM
 for i in $(seq 1 240); do
   if curl -sf -m 3 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
     kill "$LOGS" 2>/dev/null || true; wait "$LOGS" 2>/dev/null || true
+    # warm-up + self-check: one short thinking-on request. The first real request then hits a warm engine, and the
+    # answer (OAK, middle letter A) shows thinking and output both work.
+    WPORT="$PORT"; [ -n "$PROXY" ] && WPORT="$VPORT"
+    WMODEL="$(rkey vllm served-model-name)"; WMODEL="${WMODEL:-Qwen/Qwen3.8-Flash-Next}"
+    python3 - "$WPORT" "$WMODEL" <<'PY' || echo "· warm-up skipped"
+import json, re, sys, time, urllib.request
+port, model = sys.argv[1], sys.argv[2]
+q = "What is the word starting with O ending with K and that word has less then 4 letters. And what is his middle letter?"
+body = {"model": model, "max_tokens": 8000, "temperature": 1.0, "top_p": 0.95,
+        "chat_template_kwargs": {"enable_thinking": True}, "messages": [{"role": "user", "content": q}]}
+t0 = time.time()
+req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=json.dumps(body).encode(),
+                             headers={"Content-Type": "application/json"})
+m = json.load(urllib.request.urlopen(req, timeout=120))["choices"][0]["message"]
+ans = " ".join((m.get("content") or "").split())
+ok = bool(re.search(r"\b(OAK|OK)\b", ans.upper()))   # OAK (middle A) or OK (no middle letter)
+print(f"{'✓' if ok else '⚠'} warm-up: {time.time() - t0:.1f} s · {ans[:90]}")
+PY
     echo
     echo "──────────────────────────────────────────────────────────"
     echo "✓ server booted — OpenAI-compatible API is live"

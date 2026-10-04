@@ -293,9 +293,11 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
   `"chat_template_kwargs": {"enable_thinking": false}` for max speed on structured output.
 - **`mtp_depth`**: dynamic draft depth, on by default — see [Dynamic draft depth](#dynamic-draft-depth).
 - **`proxy`**: optional front proxy, absent by default — see [Front proxy](#front-proxy-v51-optional).
-- **`patches`** (server): optional vLLM patches from [`patches/`](patches/), off by default — e.g. `patches: hermes-chat`
-  for the Hermes agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)). Applied at launch over the image's
-  files; the image itself is unchanged.
+- **`patches`** (server): vLLM patches from [`patches/`](patches/), applied at launch over the image's files; the image
+  itself is unchanged. On by default: `qsa-logits-workspace` — long prefills reuse one QSA logits workspace instead of
+  growing memory until the host freezes (backport of [vllm-project/vllm#57105](https://github.com/vllm-project/vllm/pull/57105)
+  by Thien Tran; reported for this kit by [@anzax](https://github.com/anzax), #5). Optional: `hermes-chat` for the Hermes
+  agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)).
 
 ## What's in the image
 

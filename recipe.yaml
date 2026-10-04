@@ -20,8 +20,8 @@ server:
   models_dir: ./models
   cache_dir: ./cache                            # compile caches + the table map (~31G, prepared on the first boot); deletable,
                                                 # the next boot rebuilds it
-  patches: ""                                   # optional vLLM patches from patches/, space-separated (e.g. hermes-chat);
-                                                # default none = the stock image. See patches/README.md
+  patches: "qsa-logits-workspace"              # vLLM patches from patches/, space-separated (add hermes-chat for Hermes);
+                                                # "" = the stock image. See patches/README.md
 
 env:
   MBX_PLE_MMAP: "1"

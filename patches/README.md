@@ -1,10 +1,10 @@
 # Optional vLLM patches
 
-Off by default. Turn one on by listing its name in `recipe.yaml`:
+`qsa-logits-workspace` is on by default; the others are off. Turn one on by listing its name in `recipe.yaml`:
 
 ```yaml
 server:
-  patches: hermes-chat          # space-separated, applied in this order
+  patches: qsa-logits-workspace hermes-chat   # space-separated, applied in this order
 ```
 
 At launch `run.sh` copies each file a patch touches out of the image, applies the patch and mounts the result
