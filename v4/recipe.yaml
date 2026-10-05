@@ -14,7 +14,7 @@ server:
   docker_args: --security-opt seccomp=unconfined --device /dev/infiniband --ulimit memlock=-1:-1 -v /home/saren/models/ple-table-fp8:/ple-table-fp8:ro   # table reader + RDMA MR + local fp8 table
   cpuset: "5-9,15-19"                         # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
                                               # are 2.8GHz A725) — measured +2-3% at every concurrency
-  model: Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4   # LOCAL dir under models_dir
+  model: Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid   # LOCAL dir under models_dir
                                               # (no HF repo: v4/run.sh uses the bare name, skips the download when the
                                               # index is present). T80 dense-MTP g32 sides + int4 g128 routed experts.
   port: 8000
