@@ -364,7 +364,7 @@ edit that refuses to apply twice and fails the build if its target moved:
 10. a GB10 plan table for the small decode GEMMs (after [@sethforprivacy](https://github.com/sethforprivacy)'s TP=2 table), off unless
    `MBX_SKINNY_GEMM_SM12X=1`.
 
-Digest: `sha256:…` (set at publish).
+Digest: `sha256:76eda2f6c0e51fd2a9913d97b6f36abd829965ca8cad661195fd70ec763ee7a3`.
 
 v5.1 (`…-vllm:v5.1`, digest `sha256:733f1a576e7e5a4192b0475ac4c3c53b5e5f27a182e92de0972ce88853ce1edd`), v5 (`…-vllm:v5`, digest `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`), v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
 digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v5.1` / `v5` /
