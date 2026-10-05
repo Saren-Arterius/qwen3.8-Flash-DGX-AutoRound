@@ -28,6 +28,7 @@ env:
                                               # retry/stall). Same server as magi-v3 production (160 B rows).
   VLLM_PLE_RDMA_DEV: roceP2p1s0f0
   VLLM_PLE_RDMA_GID: auto
+  PLE_RDMA_LIB: /opt/rb/libple_rdma.so          # verbs helper (v4/Dockerfile); client defaults to its own dir
   VLLM_FP8_HYBRID: "1"                        # fp8 side layers inside the GPTQ checkpoint (azampatti's module, MIT)
   VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
   # No OMP_NUM_THREADS: vLLM sizes its threads itself (many for the load, one for serving); a fixed value hurts one phase.

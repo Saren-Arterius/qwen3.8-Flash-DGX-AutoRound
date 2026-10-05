@@ -46,7 +46,7 @@ class _MbxPLEFp8RdmaMethod(_MbxPLEFp8DiskMethod):
         ep = _fp8_rdma_endpoint()
         n = int(layer._mbx_mmap_rows)
         D = int(layer._mbx_fp8_D)
-        from vllm_ple_rdma_fp8 import Fp8RdmaTable
+        from vllm.models.qwen4_exp.nvidia.vllm_ple_rdma_fp8 import Fp8RdmaTable
         table = Fp8RdmaTable(ep, D, n)
         scale = table.client.remote.get("weight_scale")
         if scale is None:
