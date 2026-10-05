@@ -1,0 +1,68 @@
+# magi-v4 production config (llm branch magi-v4): myllmbox recipe v5.2 image + IPC
+# (magi-v4 image: v5.2 + never-evict pin + FP8 PLE rows over RDMA from wtako's
+# ple_rdma_server :18515) serving the hybrid-mtpdense-g32-mtpint4 checkpoint
+# (local build, no HF repo) with MTP=3 + never-evict pin + 20 GiB KV, served
+# as "qwen" in container qwen38-flash. Started by ../serve-magi.sh.
+# The one and only config. v4/run.sh reads THIS — there is nothing else to configure.
+# Flag mapping: `name: value` -> --name value | `name: true` -> --name | `name: false` -> omitted.
+
+server:
+  image: qwen38-flash-dgx:magi-v4             # local build (v4/Dockerfile): v5.2 = vLLM 0.30.0 + mbx patches
+                                              # (n-gram tables, fused multi-step MTP draft, RecoverSSM — unused here)
+                                              # + magi never-evict pin + FP8 PLE over RDMA. Build: docker build -f
+                                              # v4/Dockerfile -t qwen38-flash-dgx:magi-v4 .
+  docker_args: --security-opt seccomp=unconfined --device /dev/infiniband --ulimit memlock=-1:-1   # table reader + RDMA MR
+  cpuset: "5-9,15-19"                         # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
+                                              # are 2.8GHz A725) — measured +2-3% at every concurrency
+  model: Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4   # LOCAL dir under models_dir
+                                              # (no HF repo: v4/run.sh uses the bare name, skips the download when the
+                                              # index is present). T80 dense-MTP g32 sides + int4 g128 routed experts.
+  port: 8000
+  models_dir: /mnt/storage@WTAKO/saren/AI     # magi-v4: weights on wtako NFS (PLE rows come over RDMA anyway)
+  cache_dir: /home/saren/magi-v4-cache        # compile caches; deletable, the next boot rebuilds it
+  patches: ""                                 # magi patches are baked into the magi-v4 image (never-evict anchors
+                                              # assert at build); "" = no launch-time mounts
+
+env:
+  MBX_PLE_RDMA_FP8: 192.168.0.1:18515         # magi-v4: fp8 rows over RDMA (exclusive — no local table, failed READs
+                                              # retry/stall). Same server as magi-v3 production (160 B rows).
+  VLLM_PLE_RDMA_DEV: roceP2p1s0f0
+  VLLM_PLE_RDMA_GID: auto
+  VLLM_FP8_HYBRID: "1"                        # fp8 side layers inside the GPTQ checkpoint (azampatti's module, MIT)
+  VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
+  # No OMP_NUM_THREADS: vLLM sizes its threads itself (many for the load, one for serving); a fixed value hurts one phase.
+  PYTHONUNBUFFERED: "1"                       # load progress actually shows in ./view.sh
+  VLLM_MARLIN_USE_ATOMIC_ADD: "1"             # Marlin small-N fast path (self-gating)
+  TORCH_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+  MALLOC_MMAP_THRESHOLD_: "65536"             # glibc returns big freed blocks to the OS at once (the loader's
+  MALLOC_TRIM_THRESHOLD_: "131072"            # garbage otherwise stays resident — and swaps)
+
+vllm:
+  served-model-name: qwen
+  engram-config: '{"cpu_offload": false}'
+  gdn-prefill-backend: triton
+  distributed-executor-backend: mp
+  gpu-memory-utilization: 0.01                # KV is pinned by kv-cache-memory; keep vLLM from claiming a fraction
+  kv-cache-memory: "20000000000"              # magi-v4: 20 GiB (magi-v3 production value)
+  load-format: fastsafetensors                # weights in ~80 s; remove for vLLM's default loader (~10 min)
+  max-model-len: 262144                       # the model's native max
+  compilation-config: '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64],"compile_ranges_endpoints":[32]}'
+                                              # fixed K=3: sizes = multiples of K+1 (=4) up to seats x 4
+  max-num-seqs: 16
+  max-num-batched-tokens: 8192                # also the image-input encoder budget — keep for image requests
+  enable-prefix-caching: true
+  enable-auto-tool-choice: true
+  tool-call-parser: qwen3_xml
+  reasoning-parser: qwen3
+  speculative-config: '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
+                                              # MTP=3 (magi production depth; dynamic depth is a TODO on this stack)
+  async-scheduling: true
+  never-evict-kv-cache-prompt-includes: You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.
+  never-evict-kv-cache-max-fraction: 0.25     # ported from magi production (PIN_PROMPT)
+
+# Dynamic draft depth: OFF on magi-v4 (fixed K=3 above). The mbx dynamic machinery
+# (cache/mbx-depth.json) stays available; turning it on wants K-matched capture
+# sizes first. TODO.
+mtp_depth:
+  mode: off
