@@ -21,3 +21,13 @@ RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs \
  && python3 -c "import ctypes; ctypes.CDLL('${SP}/libple_rdma.so'); print('libple_rdma.so OK')"
 COPY src/vllm_ple_rdma.py ${SP}/vllm_ple_rdma.py
 RUN python3 -c "import ast; ast.parse(open('${SP}/vllm_ple_rdma.py').read()); print('vllm_ple_rdma.py OK')"
+
+# --- magi-v3: upstream per-request dynamic draft depth (myllmbox v5.2) ---
+# mbx_depth.py (adapted config path) + libmbx_mtp.so policy lib + hook patch.
+# Off unless serve.sh writes mode:dynamic into /tmp/mtp_depth.json.
+COPY src/mbx_depth.py ${SP}/mbx_depth.py
+RUN python3 -c "import ast; ast.parse(open('${SP}/mbx_depth.py').read()); print('mbx_depth.py OK')"
+COPY src/libmbx_mtp.so /opt/mbx/lib/libmbx_mtp.so
+RUN python3 -c "import ctypes; ctypes.CDLL('/opt/mbx/lib/libmbx_mtp.so'); print('libmbx_mtp.so OK')"
+COPY src/patch_mbx_depth.py /tmp/patch_mbx_depth.py
+RUN python3 /tmp/patch_mbx_depth.py && rm /tmp/patch_mbx_depth.py

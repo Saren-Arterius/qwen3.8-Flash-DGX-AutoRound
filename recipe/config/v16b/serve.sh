@@ -26,6 +26,14 @@ SEQS="${SEQS:-8}"
 # is inspected or called directly. launch.sh still supplies the exact env.
 GPU_MEM="${GPU_MEM:-0.01}"
 MTP="${MTP:-3}"
+# magi-v3 dynamic draft depth (image patch; off = fixed K above). Baked into
+# the image at build; these only tune the runtime controller.
+export MTP_DEPTH="${MTP_DEPTH:-off}"
+export MTP_DEPTH_MIN="${MTP_DEPTH_MIN:-3}"
+export MTP_DEPTH_WINDOW="${MTP_DEPTH_WINDOW:-48}"
+export MTP_DEPTH_PROMOTE="${MTP_DEPTH_PROMOTE:-60,45}"
+export MTP_DEPTH_DEMOTE="${MTP_DEPTH_DEMOTE:-25,15}"
+export MTP_DEPTH_LOG="${MTP_DEPTH_LOG:-0}"
 PREWARM="${PREWARM:-1}"
 TOOL_PARSER="${TOOL_PARSER:-qwen3_coder}"
 EXTRA="${EXTRA:-}"
@@ -109,6 +117,21 @@ if [ -n "${LLG_PDL:-}" ];            then IT6_ARGS+=(-e "QWEN38NEXT_LLG_PDL=$LLG
 if [ -n "${VERIFY_TOPK_TRITON:-}" ]; then IT6_ARGS+=(-e "VLLM_VERIFY_TOPK_TRITON=$VERIFY_TOPK_TRITON"); fi
 if [ -n "${KEEP_DRAFT_BLOCKS:-}" ];  then IT6_ARGS+=(-e "VLLM_KEEP_DRAFT_BLOCKS=$KEEP_DRAFT_BLOCKS"); fi
 
+DD_ARGS=()
+if [ -n "${MTP_DEPTH:-}" ];          then DD_ARGS+=(-e "MTP_DEPTH=$MTP_DEPTH"); fi
+if [ -n "${MTP_DEPTH_MIN:-}" ];      then DD_ARGS+=(-e "MTP_DEPTH_MIN=$MTP_DEPTH_MIN"); fi
+if [ -n "${MTP_DEPTH_WINDOW:-}" ];    then DD_ARGS+=(-e "MTP_DEPTH_WINDOW=$MTP_DEPTH_WINDOW"); fi
+if [ -n "${MTP_DEPTH_PROMOTE:-}" ];   then DD_ARGS+=(-e "MTP_DEPTH_PROMOTE=$MTP_DEPTH_PROMOTE"); fi
+if [ -n "${MTP_DEPTH_DEMOTE:-}" ];    then DD_ARGS+=(-e "MTP_DEPTH_DEMOTE=$MTP_DEPTH_DEMOTE"); fi
+if [ -n "${MTP_DEPTH_LOG:-}" ];       then DD_ARGS+=(-e "MTP_DEPTH_LOG=$MTP_DEPTH_LOG"); fi
+
+# magi-v3 dynamic depth: EngineCore/workers spawn with a scrubbed env, so the
+# controller reads /tmp/mtp_depth.json, not environ (same reason upstream uses
+# a JSON file). Written on every launch in the upstream schema
+# (mode/min/window/promote/demote/log); policy math is libmbx_mtp.so.
+DD_FILE="${DD_FILE:-/tmp/mtp_depth_${NAME}.json}"
+DD_MOUNT=(-v "$DD_FILE:/tmp/mtp_depth.json:ro")
+
 # The four flag strings below intentionally expand into separate argv words;
 # the promoted env supplies fixed, whitespace-separated flags.
 # TABLE_DIR="": no local table mount — PLE rows come from the RDMA daemon
@@ -135,6 +158,8 @@ DOCKER_RUN=(docker run -d --name "$NAME" --restart unless-stopped \
   "${RDMA_ARGS[@]}" \
   "${DV_ARGS[@]}" \
   "${IT6_ARGS[@]}" \
+  "${DD_ARGS[@]}" \
+  "${DD_MOUNT[@]}" \
   -e VLLM_HIT_DEBUG="${HIT_DEBUG:-0}" \
   -e VLLM_STEP_PROFILE="${STEP_PROFILE:-0}" \
   -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
@@ -162,6 +187,30 @@ case "${1:-}" in
 esac
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
+# Upstream-schema depth config (myllmbox recipe.yaml mtp_depth section).
+python3 - "$DD_FILE" <<'EOF'
+import json, os, sys
+path = sys.argv[1]
+def pair(s, default):
+    try:
+        a, b = (float(x) for x in str(s).replace(",", " ").split()[:2])
+        return [a, b]
+    except Exception:
+        return default
+mode = "dynamic" if os.environ.get("MTP_DEPTH", "off").strip().lower() == "dynamic" else "off"
+log = os.environ.get("MTP_DEPTH_LOG", "0").lower() in ("1", "true", "yes")
+cfg = {
+    "mode": mode,
+    "min": int(os.environ.get("MTP_DEPTH_MIN", "3")),
+    "window": int(os.environ.get("MTP_DEPTH_WINDOW", "48")),
+    "promote": pair(os.environ.get("MTP_DEPTH_PROMOTE", "60,45"), [60.0, 45.0]),
+    "demote": pair(os.environ.get("MTP_DEPTH_DEMOTE", "25,15"), [25.0, 15.0]),
+    "log": log,
+}
+with open(path, "w") as fh:
+    json.dump(cfg, fh)
+print("wrote %s: %s" % (path, cfg))
+EOF
 "${DOCKER_RUN[@]}"
 
 echo ">> $NAME starting on :$PORT (ctx $CTX, mtp=$MTP, seqs=$SEQS, gpu_mem=$GPU_MEM)"
