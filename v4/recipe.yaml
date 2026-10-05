@@ -50,7 +50,8 @@ vllm:
   kv-cache-memory: "20000000000"              # magi-v4: 20 GiB (magi-v3 production value)
   load-format: fastsafetensors                # weights in ~80 s; remove for vLLM's default loader (~10 min)
   max-model-len: 262144                       # the model's native max
-  compilation-config: '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64],"compile_ranges_endpoints":[32]}'
+  block-size: 1632                              # required at K=5+ (attention ring must divide the block)
+  compilation-config: '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[1,2,3,4,5,6,7,8,10,12,14,15,16,18,20,21,24,25,28,30,32,35,36,40,42,44,45,48,49,50,52,54,55,56,60,63,64,65,66,70,72,75,77,78,80,84,88,90,91,96,98,104,105,112,120,128],"compile_ranges_endpoints":[32]}'
                                               # fixed K=3: sizes = multiples of K+1 (=4) up to seats x 4
   max-num-seqs: 16
   max-num-batched-tokens: 8192                # also the image-input encoder budget — keep for image requests
@@ -58,9 +59,10 @@ vllm:
   enable-auto-tool-choice: true
   tool-call-parser: qwen3_xml
   reasoning-parser: qwen3
-  speculative-config: '{"method":"mtp","num_speculative_tokens":3,"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
+  speculative-config: '{"method":"mtp","num_speculative_tokens":7,"rejection_sample_method":"block","draft_sample_method":"probabilistic"}'
                                               # MTP=3 (magi production depth; dynamic depth is a TODO on this stack)
   async-scheduling: true
+  use-replayssm: true                           # RecoverSSM: verify off one GDN state, replay accepted only
   never-evict-kv-cache-prompt-includes: You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.
   never-evict-kv-cache-max-fraction: 0.25     # ported from magi production (PIN_PROMPT)
 
@@ -68,4 +70,9 @@ vllm:
 # (cache/mbx-depth.json) stays available; turning it on wants K-matched capture
 # sizes first. TODO.
 mtp_depth:
-  mode: off
+  mode: dynamic                                 # upstream v5.2 default; run.sh writes cache/mbx-depth.json live
+  min: 3
+  window: 48
+  promote: [60, 45]
+  demote: [25, 15]
+  log: false
