@@ -37,6 +37,9 @@ v5.1 stays available: `git checkout v5.1`.
 |---|---|---|
 | thinking-on request (pasture), c=1, 12 runs: thinking / code / peak | **57.4 / 98.4 / 110.8** | 50.9 / 71.7 / 90.8 |
 | KV pool | **777,693** tokens | 876,726 tokens |
+| prefill, 128k-token prompt | **2,727** tok/s | 2,053 tok/s |
+| first token, 1k prompt | **0.57** s | 0.68 s |
+| peak at 16 streams (thinking off, mixed) | **414** tok/s | 335 tok/s |
 
 **v5.1 → v5.2 per prompt** ([side by side on myllmbox.com](https://myllmbox.com/?a=mbx-v51&b=mbx-v52); thinking off, aggregate tok/s of all streams, averages of 3 runs; c=1 = one full answer, c≥2 =
 300 s with every stream kept busy)
@@ -196,19 +199,19 @@ finished request is replaced at once and its new prompt's prefill is part of the
 
 ## Quality (measured on this model, thinking on)
 
-Both checkpoints, lm-evaluation-harness against a running serve, **thinking on**, temperature 0.6 / top-p 0.95 / top-k 20,
+All three checkpoints, lm-evaluation-harness against a running serve, **thinking on**, temperature 0.6 / top-p 0.95 / top-k 20,
 a 32k-token budget per answer, HumanEval complete and a fixed 200-question subset (seed 123123123) of the others — the same
-763 questions for both columns. Qwen publishes no numbers for these four tests (its card reports LiveCodeBench v6 91.9, GPQA
+763 questions for every column. Qwen publishes no numbers for these four tests (its card reports LiveCodeBench v6 91.9, GPQA
 Diamond 91.7, IFBench 81.3, SWE-bench Pro 62.5). The v4 changes are output-exact (speculative decoding keeps the model's own
 distribution), so the scores carry over.
 
-| task | questions | hibrid48 | hibrid48-uncensored |
-|---|---|---|---|
-| HumanEval pass@1 | 164 | **95.7** | **94.5** |
-| GSM8K exact match | 200 | **98.0** | **97.5** |
-| IFEval prompt-level strict / instruction-level strict | 200 | **91.5** / 93.4 | **94.5** / 96.2 |
-| MMLU-Pro (14 subjects, sampled by size) | 200 | **84.9** | **82.9** |
-| answers that ran into the 32k budget while thinking (count as wrong) | 763 | 11 | 6 |
+| task | questions | INT4-AutoRound (v5.2) | hibrid48 | hibrid48-uncensored |
+|---|---|---|---|---|
+| HumanEval pass@1 | 164 | **93.3** | **95.7** | **94.5** |
+| GSM8K exact match | 200 | **99.0** | **98.0** | **97.5** |
+| IFEval prompt-level strict / instruction-level strict | 200 | **91.5** / 94.0 | **91.5** / 93.4 | **94.5** / 96.2 |
+| MMLU-Pro (14 subjects, sampled by size) | 200 | **82.9** | **84.9** | **82.9** |
+| answers that ran into the 32k budget while thinking (count as wrong) | 763 | 6 | 11 | 6 |
 
 The IFEval gain is the one difference larger than the subsets' sampling error (about ±3 points); the other deltas are one to
 four questions each. The abliterated body thinks shorter (median reasoning −8 %, 90th percentile −27 %) and runs away half as
