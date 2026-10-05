@@ -1,15 +1,52 @@
 # Qwen3.8-Flash-Next on one DGX Spark
 
-### Two checkpoints: `hibrid48`, the default — and `hibrid48-uncensored`, made from it (abliterated, gated). Switch with one line in `recipe.yaml`
+### Three checkpoints: `INT4-AutoRound`, the default and fastest — and `hibrid48` / `hibrid48-uncensored`, about 20 % slower and more creative. Switch with one line in `recipe.yaml`
 
-[`hibrid48`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid48) (the base model, default, every speed number below)
-and [`hibrid48-uncensored`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored) (OrcaRouter's abliterated
-body with the same output head, no refusals, no guardrails — gated, research / private use). Same shapes tensor for tensor,
-so the same speed. To switch: in `recipe.yaml` comment the active `model:` line and uncomment the other, then `./run.sh`.
-Details in [Which checkpoint](#which-checkpoint).
+[`INT4-AutoRound`](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound) by
+[@azampatti](https://github.com/azampatti) (default, every v5.2 number below): 5 of 512 experts per token, AutoRound int4
+experts, fp8 side layers and n-gram table. [`hibrid48`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid48) and
+[`hibrid48-uncensored`](https://huggingface.co/myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored) (the full 10-expert body,
+NVFP4; the uncensored one is gated, no guardrails): about 20 % slower, and their answers are richer and more creative. To
+switch: in `recipe.yaml` comment the active `model:` line and uncomment another, then `./run.sh` — the kit applies each
+checkpoint's settings itself. Details in [Which checkpoint](#which-checkpoint).
 
-One box, one model, three commands. **v5.1: RecoverSSM + dynamic draft depth up to 7 by default, an
-877k-token KV pool, 322 tok/s peak at 16 streams, and an optional front proxy with a loop guard.**
+One box, one model, three commands. **v5.2: the INT4-AutoRound checkpoint on the v5.1 stack — 65 tok/s single-stream on
+mixed text, 339–383 tok/s at 16 streams, 111 tok/s peak, +13 to +40 % over v5.1 on every prompt and concurrency.**
+
+**Side by side with v5.1** — every number, gauntlet page and quality verdict: [myllmbox.com/?a=mbx-v51&b=mbx-v52](https://myllmbox.com/?a=mbx-v51&b=mbx-v52)
+
+## v5.2 (2026-10-05)
+
+v5.1 stays available: `git checkout v5.1`.
+
+**New**
+
+1. **Default checkpoint: [INT4-AutoRound](https://huggingface.co/azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound)** by
+   [@azampatti](https://github.com/azampatti), as published. Its 49 GB fp8 n-gram table is served from disk by the image's
+   table reader like hibrid48's, so the memory goes to weights and KV; its fp8 side layers load through his
+   `vllm_fp8_hybrid` module (MIT, after [@Saren-Arterius](https://github.com/Saren-Arterius)'s
+   [spark-dflash-hybrid-fp8](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound)).
+2. **Same stack as v5.1**: RecoverSSM, dynamic draft depth up to 7, sampled drafts with block verification, 16 seats. With
+   this checkpoint the draft uses its own MTP head routing 10 experts, and `run.sh` sets that up (`cache/draft-k10`).
+3. **One image for all three checkpoints.** `hibrid48` and `hibrid48-uncensored` run on the v5.2 image exactly as on v5.1
+   (same table map).
+
+**Measured** (one DGX Spark, image v5.2, the shipped `recipe.yaml`; gauntlet and c=1–6 on one box, c=8–16 on a second)
+
+| | v5.2 (INT4-AutoRound) | v5.1 (hibrid48) |
+|---|---|---|
+| thinking-on request (pasture), c=1, 12 runs: thinking / code / peak | **57.4 / 98.4 / 110.8** | 50.9 / 71.7 / 90.8 |
+| KV pool | **777,693** tokens | 876,726 tokens |
+
+**v5.1 → v5.2 per prompt** ([side by side on myllmbox.com](https://myllmbox.com/?a=mbx-v51&b=mbx-v52); thinking off, aggregate tok/s of all streams, averages of 3 runs; c=1 = one full answer, c≥2 =
+300 s with every stream kept busy)
+
+| prompt | c=1 | c=2 | c=4 | c=6 | c=8 | c=12 | c=16 |
+|---|---|---|---|---|---|---|---|
+| mixed (code + explanation) | 55.6 → **64.7** | 84.6 → **111.0** | 119.7 → **145.5** | 157.8 → **186.4** | 192.1 → **225.1** | 239.2 → **286.0** | 282.7 → **338.8** |
+| structured output (JSON schema) | 72.2 → **85.0** | 106.4 → **135.8** | 147.7 → **183.9** | 185.2 → **230.9** | 228.6 → **282.3** | 267.5 → **330.3** | 312.9 → **374.6** |
+| long prose (7,000-word story) | 43.8 → **49.8** | 69.0 → **82.2** | 107.1 → **130.7** | 121.7 → **162.3** | 152.1 → **187.4** | 185.7 → **226.8** | 211.5 → **258.6** |
+| code (TypeScript) | 76.2 → **86.3** | 104.4 → **141.0** | 145.8 → **193.4** | 174.5 → **233.6** | 209.9 → **287.2** | 243.9 → **341.7** | 286.9 → **382.7** |
 
 ## v5.1 (2026-10-02)
 
@@ -179,6 +216,9 @@ often. Published leaderboard numbers use other prompts, few-shot counts and full
 
 ## What changed
 
+**v5.2 (2026-10-05): the INT4-AutoRound checkpoint is the default** — +13 to +40 % over v5.1; hibrid48 and its uncensored twin
+stay one line away. See [v5.2](#v52-2026-10-05). v5.1 stays available: `git checkout v5.1`.
+
 **v5.1 (2026-10-02): RecoverSSM, dynamic depth up to 7 by default, optional front proxy.** See
 [v5.1](#v51-2026-10-02). v5 stays available: `git checkout v5`.
 
@@ -209,13 +249,14 @@ single-stream at 17.7 engine steps/s (v2: 50 at 14.4). v2 stays available: `git 
 ## Quick start
 
 ```bash
-git clone https://github.com/bilikaz/qwen38-flash-next-recipe.git
+git clone https://github.com/myllmbox/qwen38-flash-next-recipe.git
 cd qwen38-flash-next-recipe
-./run.sh        # downloads ~98G from HF on first run, serves the OpenAI API on :8000
+./run.sh        # downloads ~120G from HF on first run (hibrid48: ~98G), serves the OpenAI API on :8000
 ```
 
 `./stop.sh` stops it. `./view.sh` shows live stats (throughput, KV usage, speculative-decoding acceptance). Requirements: a DGX
-Spark with docker + the NVIDIA container runtime, and ~31G free on the disk under `./cache` for the table map. A boot reaches
+Spark with docker + the NVIDIA container runtime, and free disk under `./cache` for the table map (~52G for INT4-AutoRound,
+~31G for hibrid48). A boot reaches
 healthy in about four minutes (weights ~80 s); the very first boot on a box adds a few minutes to prepare the map.
 
 **All configuration lives in [`recipe.yaml`](recipe.yaml)** — one file: image, weights repo, port, context length,
@@ -234,19 +275,20 @@ for one when the repo is gated — after you accepted its agreement on the model
 
 ## Which checkpoint
 
-Two checkpoints run on this stack; `recipe.yaml` ships with the first active and the second commented out under it.
-Switching is comment one line, uncomment the other, `./run.sh`:
+Three checkpoints run on this stack; `recipe.yaml` ships with the first active and the other two commented out under it.
+Switching is comment one line, uncomment another, `./run.sh`; `run.sh` applies each checkpoint's settings itself:
 
 | `model:` | what it is | on this kit |
 |---|---|---|
-| `myllmbox/Qwen3.8-Flash-Next-hibrid48` (default) | the base model, calibrated body, NVFP4 output head — every speed number above | v5.1: 86 tok/s single-stream peak, 322 tok/s peak at 16 streams |
+| `azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound` (default) | 5 of 512 experts per token, AutoRound int4 experts, fp8 side layers and n-gram table — every v5.2 number above | the fastest: 65 tok/s single-stream (mixed), 339–383 tok/s at 16 streams, 111 tok/s peak |
+| `myllmbox/Qwen3.8-Flash-Next-hibrid48` | the full 10-expert body, calibrated, NVFP4 output head | about 20 % slower (v5.1 numbers), richer and more creative answers |
 | `myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored` | OrcaRouter's abliterated (refusal-removed) body with the same head — **no guardrails**; research, red-teaming, private use behind your own moderation | same shapes, same n-gram table → same speed and the same table map; quality table above (IFEval 94.5, HumanEval 94.5, GSM8K 97.5, MMLU-Pro 82.9) |
 
 The uncensored repo is **gated**: open its Hugging Face page, accept the agreement, then `hf auth login` (or `export
 HF_TOKEN=…`) before `./run.sh` — the kit checks both and tells you what is missing. Running both checkpoints at different
 times? Set `served-model-name` to something distinct (e.g. `Qwen/Qwen3.8-Flash-Next-Uncensored`) so clients and logs can tell
-them apart. Both weigh 98 GB; the first download of the second one is a full download (different body), the 8 table shards are
-shared bytes.
+them apart. The two hibrid48 checkpoints weigh 98 GB each (the 8 table shards are shared bytes); INT4-AutoRound is ~120 GB
+(71 GB of weights + its 49 GB table) and prepares its own table map in `cache/` (~52G) on its first boot.
 
 ## Memory on a Spark: what the kit does about it
 
@@ -275,7 +317,8 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 
 ## Tuning (recipe.yaml)
 
-- **`kv-cache-memory`** (bytes): 27G bf16 = 876,726 tokens; 26G for more headroom.
+- **`kv-cache-memory`** (bytes): 27G bf16 = 876,726 tokens with hibrid48 (26G for more headroom); with INT4-AutoRound
+  `run.sh` uses 24G = 777,693 tokens.
 - **`max-num-seqs`** 16: with RecoverSSM each request holds one recurrent state (no per-draft copies); 16 streams use ~43 % of
   the pool.
 - **`speculative-config`** up to 7 sampled draft tokens with block verification, depth chosen per request
@@ -294,14 +337,15 @@ GPU's memory *is* those pages, so every migration first unmaps them from the GPU
 - **`mtp_depth`**: dynamic draft depth, on by default — see [Dynamic draft depth](#dynamic-draft-depth).
 - **`proxy`**: optional front proxy, absent by default — see [Front proxy](#front-proxy-v51-optional).
 - **`patches`** (server): vLLM patches from [`patches/`](patches/), applied at launch over the image's files; the image
-  itself is unchanged. On by default: `qsa-logits-workspace` — long prefills reuse one QSA logits workspace instead of
-  growing memory until the host freezes (backport of [vllm-project/vllm#57105](https://github.com/vllm-project/vllm/pull/57105)
-  by Thien Tran; reported for this kit by [@anzax](https://github.com/anzax), #5). Optional: `hermes-chat` for the Hermes
-  agent (contributed by [@yume-arasaki](https://github.com/yume-arasaki)).
+  itself is unchanged. Optional: `hermes-chat` for the Hermes agent (contributed by
+  [@yume-arasaki](https://github.com/yume-arasaki)). The QSA logits-workspace fix (long prefills reuse one workspace instead of
+  growing memory until the host freezes; backport of [vllm-project/vllm#57105](https://github.com/vllm-project/vllm/pull/57105)
+  by Thien Tran, reported for this kit by [@anzax](https://github.com/anzax), #5) is built into the v5.2 image; the
+  `qsa-logits-workspace` patch is for the v5.1 image only.
 
 ## What's in the image
 
-`myllmbox/qwen38-flash-next-vllm:v5.1` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
+`myllmbox/qwen38-flash-next-vllm:v5.2` — upstream `vllm/vllm-openai:v0.30.0` plus patches, each an anchored or sha256-checked
 edit that refuses to apply twice and fails the build if its target moved:
 
 1. **the NVFP4 n-gram table** on 0.30's embedding plugin — stock 0.30 refuses this checkpoint's table,
@@ -309,19 +353,21 @@ edit that refuses to apply twice and fails the build if its target moved:
 3. **fused multi-step draft metadata** — the code proposed upstream as
    [vllm-project/vllm#58449](https://github.com/vllm-project/vllm/pull/58449),
 4. the loader's page-cache drop, the QSA pre-indexer rope clamp, and two inert knobs,
-5. **the table library** (`/opt/mbx/lib/libmbx_ple_nvme.so`, binary): prepares and serves the table map; it only accepts this
-   release's n-gram table and stops with "invalid quant" otherwise,
+5. **the table library** (`/opt/mbx/lib/libmbx_ple_nvme.so`, binary): prepares and serves the table map; it only accepts the
+   n-gram tables of this release's checkpoints and stops with "invalid quant" otherwise,
 6. **draft-depth hooks** and the depth library (`/opt/mbx/lib/libmbx_mtp.so`, binary): idle with `mtp_depth.mode: off`,
 7. **RecoverSSM** ([vllm-project/vllm#58863](https://github.com/vllm-project/vllm/pull/58863), ported to 0.30, base files
    sha256-checked), used with `use-replayssm`,
 8. **the front proxy** (`mbx_proxy`, compiled), started only with a `proxy:` section,
-9. a GB10 plan table for the small decode GEMMs (after [@sethforprivacy](https://github.com/sethforprivacy)'s TP=2 table), off unless
+9. **INT4-AutoRound support**: the fp8 side layers inside the GPTQ checkpoint (azampatti's `vllm_fp8_hybrid`, MIT) and its fp8
+   n-gram table on the table library,
+10. a GB10 plan table for the small decode GEMMs (after [@sethforprivacy](https://github.com/sethforprivacy)'s TP=2 table), off unless
    `MBX_SKINNY_GEMM_SM12X=1`.
 
-Digest: `sha256:733f1a576e7e5a4192b0475ac4c3c53b5e5f27a182e92de0972ce88853ce1edd`.
+Digest: `sha256:…` (set at publish).
 
-v5 (`…-vllm:v5`, digest `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`), v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
-digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v5` /
+v5.1 (`…-vllm:v5.1`, digest `sha256:733f1a576e7e5a4192b0475ac4c3c53b5e5f27a182e92de0972ce88853ce1edd`), v5 (`…-vllm:v5`, digest `sha256:695882cca3c64ff49d538fd37d72ae7db4537d039ff633da67909648b5ba4676`), v4 (`…-vllm:v4`, digest `sha256:51629f438f5ba3f7a96db110826c783d69b91a6851c43fb07d447644f157dcc4`), v3 (`…-vllm:v3`, vLLM 0.29,
+digest `sha256:61d2bc6ba5977024895734d0ef94918ac806d936c4e17a263906e246599f9862`), v2 and v1 stay available: `git checkout v5.1` / `v5` /
 `v4` / `v3` / `v2` / `v1`.
 
 ## The full box

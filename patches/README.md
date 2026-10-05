@@ -1,11 +1,13 @@
 # Optional vLLM patches
 
-`qsa-logits-workspace` is on by default; the others are off. Turn one on by listing its name in `recipe.yaml`:
+Off by default. Turn one on by listing its name in `recipe.yaml`:
 
 ```yaml
 server:
-  patches: qsa-logits-workspace hermes-chat   # space-separated, applied in this order
+  patches: hermes-chat          # space-separated, applied in this order
 ```
+
+`qsa-logits-workspace` is built into the v5.2 image; list it only with the v5.1 image (`git checkout v5.1`).
 
 At launch `run.sh` copies each file a patch touches out of the image, applies the patch and mounts the result
 read-only over the image's file. The image is never changed; an empty

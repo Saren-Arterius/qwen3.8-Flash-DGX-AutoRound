@@ -97,20 +97,50 @@ if [ ! -f "$MODEL_DIR/model.safetensors.index.json" ] || [ -n "$(find "$MODEL_DI
   hf_access "$HF_REPO" || exit 1
   echo "· downloading $HF_REPO -> $MODEL_DIR"
   if command -v hf >/dev/null; then
-    hf download "$HF_REPO" --local-dir "$MODEL_DIR"
+    hf download "$HF_REPO" --local-dir "$MODEL_DIR" --exclude "fast-fp8/*"
   else
     # -t gives tqdm a TTY so per-file progress bars actually render; HF_TOKEN passes
     # through if exported (higher rate limits) and is harmless when unset.
     TTY=""; [ -t 1 ] && TTY="-t"
     # the container runs as root — hand the files back to the host user afterwards
     docker run --rm $TTY -e HF_TOKEN -v "$MODELS_ABS:/dl" --entrypoint python3 "$IMAGE" \
-      -c "from huggingface_hub import snapshot_download; import subprocess; snapshot_download('$HF_REPO', local_dir='/dl/$LOCAL_NAME'); subprocess.run(['chown', '-R', '$(id -u):$(id -g)', '/dl/$LOCAL_NAME'], check=False)"
+      -c "from huggingface_hub import snapshot_download; import subprocess; snapshot_download('$HF_REPO', local_dir='/dl/$LOCAL_NAME', ignore_patterns=['fast-fp8/*']); subprocess.run(['chown', '-R', '$(id -u):$(id -g)', '/dl/$LOCAL_NAME'], check=False)"
   fi
 fi
 
 # --- assemble docker env + vllm flags straight from the recipe ----------------------------------
 ENVS=()
 while IFS=$'\t' read -r k v; do [ -n "$k" ] && ENVS+=(-e "$k=$v"); done < <(rsection env)
+
+# INT4-AutoRound checkpoint (fp8 n-gram table in ple-table/, its own MTP draft head): table folder + its own table map, and the
+# draft folder the speculative-config points at (cache/draft-k10: links + small JSON, top-k 10, the head's shared-expert width)
+if [ -d "$MODEL_DIR/ple-table" ]; then
+  ENVS+=(-e "MBX_PLE_FP8_DIR=/models/$LOCAL_NAME/ple-table" -e "MBX_PLE_NVME_DIR=/cache/ple-nvme-fp8")
+  python3 - "$MODEL_DIR" "/models/$LOCAL_NAME" "$CACHE_ABS/draft-k10" <<'PY' || { echo "✗ could not build the draft folder"; exit 1; }
+import json, os, shutil, struct, sys
+snap, csnap, out = sys.argv[1:4]
+wm = json.load(open(os.path.join(snap, "model.safetensors.index.json")))["weight_map"]
+keep = {k: v for k, v in wm.items() if k.startswith(("mtp.", "lm_head.")) or k.endswith("embed_tokens.weight")}
+if os.path.lexists(out):
+    shutil.rmtree(out)
+os.makedirs(out)
+for f in sorted(os.listdir(snap)):
+    if f in ("config.json", "model.safetensors.index.json", "ple-table", "fast-fp8", ".cache") or \
+       (f.endswith(".safetensors") and f not in set(keep.values())):
+        continue
+    os.symlink(os.path.join(csnap, f), os.path.join(out, f))
+json.dump({"metadata": {}, "weight_map": keep}, open(os.path.join(out, "model.safetensors.index.json"), "w"))
+cfg = json.load(open(os.path.join(snap, "config.json"))); t = cfg.get("text_config", cfg)
+t["num_experts_per_tok"] = 10
+with open(os.path.join(snap, "model_extra_tensors.safetensors"), "rb") as fh:
+    h = json.loads(fh.read(struct.unpack("<Q", fh.read(8))[0]))
+w = {v["shape"][0] for k, v in h.items() if k.endswith("mlp.shared_expert.gate_proj.weight")}
+if len(w) == 1:
+    t["shared_expert_intermediate_size"] = w.pop()
+json.dump(cfg, open(os.path.join(out, "config.json"), "w"), indent=2)
+PY
+  echo "· INT4-AutoRound: fp8 table from ple-table/ (its map: cache/ple-nvme-fp8, ~52G, built on the first boot), draft head in cache/draft-k10"
+fi
 FLAGS=()
 while IFS=$'\t' read -r k v; do
   case "$v" in
@@ -119,6 +149,23 @@ while IFS=$'\t' read -r k v; do
     *)           FLAGS+=("--$k" "$v");;
   esac
 done < <(rsection vllm)
+
+# INT4-AutoRound profile (measured on this checkpoint): fp8 side layers + draft scale 2, its draft head, no global MoE backend
+# (int4 experts take Marlin anyway; the draft head's bf16 experts refuse it), KV 24G (27G leaves too little headroom)
+if [ -d "$MODEL_DIR/ple-table" ]; then
+  ENVS+=(-e VLLM_FP8_HYBRID=1 -e MBX_MTP_DRAFT_SCALE=2)
+  F2=(); i=0
+  while [ $i -lt ${#FLAGS[@]} ]; do
+    f="${FLAGS[$i]}"
+    case "$f" in
+      --moe-backend) i=$((i + 2)); continue;;
+      --speculative-config) F2+=("$f" "${FLAGS[$((i + 1))]/\{\"method\":\"mtp\",/{\"method\":\"mtp\",\"model\":\"/cache/draft-k10\",}"); i=$((i + 2)); continue;;
+      --kv-cache-memory) v="${FLAGS[$((i + 1))]}"; [ "$v" = 27000000000 ] && v=24000000000; F2+=("$f" "$v"); i=$((i + 2)); continue;;
+    esac
+    F2+=("$f"); i=$((i + 1))
+  done
+  FLAGS=("${F2[@]}")
+fi
 
 # optional front proxy (recipe.yaml `proxy:` section; absent = none, vLLM serves :$PORT itself): keepalive pings during long
 # prefills + a loop guard on the reasoning stream (logs to cache/logs/, stop: true also cuts the stream and aborts the seat)

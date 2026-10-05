@@ -2,26 +2,29 @@
 # Flag mapping: `name: value` -> --name value | `name: true` -> --name | `name: false` -> omitted.
 
 server:
-  image: myllmbox/qwen38-flash-next-vllm:v5.1   # pinned public tag (digest in README) = vLLM 0.30.0 (vllm/vllm-openai) + patches:
-                                                # the NVFP4 n-gram table, the 4-bit output head (hibrid48) — stock 0.30 cannot load
-                                                # either — the fused multi-step MTP draft, the loader's page-cache hygiene.
-                                                # v3 (vLLM 0.29, image v3) = `git checkout v3`.
+  image: myllmbox/qwen38-flash-next-vllm:v5.2   # pinned public tag (digest in README) = vLLM 0.30.0 (vllm/vllm-openai) + patches:
+                                                # the n-gram tables (fp8 and NVFP4), the INT4-AutoRound fp8 side layers, the 4-bit
+                                                # output head (hibrid48), the fused multi-step MTP draft, RecoverSSM.
+                                                # v5.1 (hibrid48 default) = `git checkout v5.1`.
   docker_args: --security-opt seccomp=unconfined   # required by the image's table reader
   cpuset: "5-9,15-19"                           # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
                                                 # are 2.8GHz A725) — measured +2-3% at every concurrency
-  model: myllmbox/Qwen3.8-Flash-Next-hibrid48   # HF repo — downloaded into ./models on first run (~98G)
+  model: azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound   # HF repo — downloaded into ./models on first run (~120G)
+                                                # 5 of 512 experts per token, AutoRound int4 — the fastest. run.sh applies its
+                                                # settings itself (fp8 table, its draft head, KV 24G)
+  # model: myllmbox/Qwen3.8-Flash-Next-hibrid48   # the full 10-expert body (NVFP4, 98G): ~20 % slower, more creative answers
   # model: myllmbox/Qwen3.8-Flash-Next-hibrid48-uncensored   # the abliterated body (OrcaRouter) with the same head, 98G:
                                                 # no refusals, NO guardrails — research / red-teaming / private use behind your
                                                 # own moderation. GATED on Hugging Face: accept its agreement, then hf auth login
-                                                # or export HF_TOKEN (run.sh checks). Same n-gram table, same speed; nothing else
-                                                # in this file changes. Set served-model-name to Qwen/Qwen3.8-Flash-Next-Uncensored
-                                                # if you run both and want them told apart.
+                                                # or export HF_TOKEN (run.sh checks). Same speed as hibrid48. Set served-model-name
+                                                # to Qwen/Qwen3.8-Flash-Next-Uncensored if you run both and want them told apart.
   port: 8000
   models_dir: ./models
-  cache_dir: ./cache                            # compile caches + the table map (~31G, prepared on the first boot); deletable,
+  cache_dir: ./cache                            # compile caches + the table map (~52G INT4-AutoRound / ~31G hibrid48, prepared
+                                                # on the first boot of each); deletable,
                                                 # the next boot rebuilds it
-  patches: "qsa-logits-workspace"              # vLLM patches from patches/, space-separated (add hermes-chat for Hermes);
-                                                # "" = the stock image. See patches/README.md
+  patches: ""                                   # vLLM patches from patches/, space-separated (e.g. hermes-chat for Hermes);
+                                                # "" = the image as shipped. See patches/README.md
 
 env:
   MBX_PLE_MMAP: "1"
@@ -40,10 +43,10 @@ vllm:
   served-model-name: Qwen/Qwen3.8-Flash-Next
   engram-config: '{"cpu_offload": false}'
   gdn-prefill-backend: triton
-  moe-backend: marlin                           # fastest MoE kernel for NVFP4 W4A16 on the GB10
+  moe-backend: marlin                           # fastest MoE kernel for NVFP4 W4A16 on the GB10 (hibrid48; run.sh drops it for INT4-AutoRound)
   distributed-executor-backend: mp
   gpu-memory-utilization: 0.70                  # with kv-cache-memory pinned this does not size the KV pool
-  kv-cache-memory: "27000000000"                # 27G bf16 = 876,726 KV tokens (3.34 full 262K requests). Leaves ~1G available
+  kv-cache-memory: "27000000000"                # hibrid48: 27G bf16 = 876,726 KV tokens. INT4-AutoRound: run.sh uses 24G = 777,693. Leaves ~1G available
                                                 # at 16 streams; 26G if you run other things on the box
   load-format: fastsafetensors                  # weights in ~80 s; remove for vLLM's default loader (~10 min)
   max-model-len: 262144                         # the model's native max
