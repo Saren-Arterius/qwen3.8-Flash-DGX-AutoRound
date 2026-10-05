@@ -11,7 +11,7 @@ server:
                                               # (n-gram tables, fused multi-step MTP draft, RecoverSSM — unused here)
                                               # + magi never-evict pin + FP8 PLE over RDMA. Build: docker build -f
                                               # v4/Dockerfile -t qwen38-flash-dgx:magi-v4 .
-  docker_args: --security-opt seccomp=unconfined --device /dev/infiniband --ulimit memlock=-1:-1   # table reader + RDMA MR
+  docker_args: --security-opt seccomp=unconfined --device /dev/infiniband --ulimit memlock=-1:-1 -v /home/saren/models/ple-table-fp8:/ple-table-fp8:ro   # table reader + RDMA MR + local fp8 table
   cpuset: "5-9,15-19"                         # the GB10's 10 Cortex-X925 3.9GHz cores (0-4,10-14
                                               # are 2.8GHz A725) — measured +2-3% at every concurrency
   model: Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4   # LOCAL dir under models_dir
@@ -24,10 +24,12 @@ server:
                                               # assert at build); "" = no launch-time mounts
 
 env:
-  MBX_PLE_RDMA_FP8: 192.168.0.1:18515         # magi-v4: fp8 rows over RDMA (exclusive — no local table, failed READs
-                                              # retry/stall). Same server as magi-v3 production (160 B rows).
-  VLLM_PLE_RDMA_DEV: roceP2p1s0f0
-  VLLM_PLE_RDMA_GID: auto
+  MBX_PLE_RDMA_FP8: ""                        # magi-v4 SSD test: empty = stock DiskMethod from /ple-table-fp8
+                                              # (RDMA hook in image stays dormant). Set to 192.168.0.1:18515 for RDMA.
+  MBX_PLE_FP8_DIR: /ple-table-fp8
+  MBX_PLE_MMAP: "1"
+  MBX_PLE_MMAP_MODE: "nvme"
+  MBX_PLE_MMAP_PREWARM: "0"
   PLE_RDMA_LIB: /opt/rb/libple_rdma.so          # verbs helper (v4/Dockerfile); client defaults to its own dir
   VLLM_FP8_HYBRID: "1"                        # fp8 side layers inside the GPTQ checkpoint (azampatti's module, MIT)
   VLLM_USE_BREAKABLE_CUDAGRAPH: "1"
