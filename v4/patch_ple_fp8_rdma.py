@@ -62,11 +62,40 @@ class _MbxPLEFp8RdmaMethod(_MbxPLEFp8DiskMethod):
 
     def embedding(self, layer, input_: torch.Tensor) -> torch.Tensor:
         shape = input_.shape
-        import numpy as _np
-        ids = input_.reshape(-1).to("cpu", dtype=torch.int64).numpy()
-        rows = layer._mbx_mm_table.gather(_np.ascontiguousarray(ids))
-        out = torch.from_numpy(rows).to(input_.device).view(torch.float8_e4m3fn)
+        name = getattr(layer, "_mbx_fp8_rdma_name", None)
+        if name is None:
+            name = f"fp8rdma-{id(layer)}"
+            layer._mbx_fp8_rdma_name = name
+            _FP8_RDMA_LAYERS[name] = layer
+        out = torch.empty((input_.numel(), int(layer._mbx_fp8_D)),
+                          dtype=torch.float8_e4m3fn, device=input_.device)
+        _fp8_rdma_gather_eager(input_, out, name)
         return out.view(*shape, -1)
+
+
+try:
+    from vllm.compilation.breakable_cudagraph import eager_break_during_capture as _fp8_eb
+except Exception:  # noqa: BLE001
+    _fp8_eb = None
+
+_FP8_RDMA_LAYERS: dict = {}
+
+
+def _fp8_rdma_gather_impl(ids: torch.Tensor, out: torch.Tensor, layer_name: str) -> None:
+    """Sync RDMA gather; runs EAGER (outside graph capture) via _fp8_eb, so
+    pageable host copies and READ stalls are legal here."""
+    layer = _FP8_RDMA_LAYERS[layer_name]
+    import numpy as _np
+    ids_np = _np.ascontiguousarray(
+        torch.clamp(ids.reshape(-1), 0, layer._mbx_mm_S - 1).to("cpu", dtype=torch.int64).numpy())
+    rows = layer._mbx_mm_table.gather(ids_np)
+    out.copy_(torch.from_numpy(rows).view(torch.float8_e4m3fn).to(out.device))
+
+
+if _fp8_eb is not None:
+    _fp8_rdma_gather_eager = _fp8_eb(_fp8_rdma_gather_impl)
+else:
+    _fp8_rdma_gather_eager = _fp8_rdma_gather_impl
 
 
 _orig_fp8_from_quant_config = Qwen4ExpPLEEmbeddingMethod.from_quant_config
