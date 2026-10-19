@@ -1,191 +1,184 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<p align="center"><a href="https://github.com/dime-online"><img src="docs/assets/hero-banner-v7.png" alt="Qwen3.8 Flash · DGX UltraFast banner with 74 tok/s single stream and 212 tok/s aggregate on one DGX Spark, over cyan and magenta speed rays" width="100%"></a></p>
 
-# Qwen3.8 Flash · DGX UltraFast
+# magi-v3: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2
 
-A vLLM serving recipe for Qwen3.8-Flash-Next on a single NVIDIA DGX Spark or other GB10 system. The promoted configuration, v16b, decodes a copy-heavy workload at up to **74.1 tok/s** on one stream and **212.2 tok/s** aggregate across eight concurrent streams, among the fastest publicly documented GB10 recipes in that workload class. The speed comes from MTP speculative decoding with a dense drafter and a leaner per-step path, not from lower-bit target weights: the W4A16/FP8 target verifies every drafted token with block rejection, the served stack scores 93% on a 492-item evaluation suite on two seeds, and its teacher-forced agreement with the original checkpoint sits inside the measurement noise band. Every published number ships with its raw per-round data and the script that measured it, and the whole stack builds from public downloads.
+Production serving stack for **Qwen3.8-Flash-Next** on a single NVIDIA DGX
+Spark (GB10). vLLM **0.32.0** with native Qwen4Exp support, **DFlash2**
+speculative decoding (3 draft tokens), and the PLE n-gram table served
+**exclusively over RDMA** from wtako — no local table copy. OpenAI-compatible
+API on port 8000 under the model name `qwen`, with tool calling
+(`qwen3_xml`) and reasoning (`qwen3`) parsers enabled.
 
-Based on [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound) (Apache-2.0, (c) blazux).
+This branch forked from the upstream v16b recipe (MTP + mmap table). The
+upstream docs under `docs/` and `recipe/` describe that lineage and its
+numbers; they do not apply to this stack.
 
-![License](https://img.shields.io/badge/license-Apache%202.0-244d64) ![Hardware](https://img.shields.io/badge/hardware-GB10-244d64) ![Model](https://img.shields.io/badge/model-Qwen3.8--Flash--Next-244d64) ![vLLM](https://img.shields.io/badge/vLLM-0.1.dev20073-244d64) ![CUDA](https://img.shields.io/badge/CUDA-13.0-244d64)
+## Current stack
 
-## Results
+| Piece | Value |
+|---|---|
+| Base image | `vllm/vllm-openai:v0.32.0` (pinned sha256, see `Dockerfile.v032`) |
+| Built image | `qwen38-flash-dgx:magi-v3-v032` |
+| Target checkpoint | `Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid`, table-stripped GPTQ: INT4 routed experts, blockwise-FP8 side layers, INT8 `lm_head` |
+| Drafter | `Qwen3.8-Flash-Next-DFlash2` (vLLM native `dflash`, EAGLE3-style) |
+| Context / KV / streams | 262144 tokens, `KV_BYTES=18g`, `SEQS=16`, prefix cache + chunked prefill on |
+| PLE table | 320001536 rows × 160 B FP8 over RDMA (`192.168.0.1:18515`), graph-capturable host-func lookup (default) |
+| CUDA graphs | `FULL_AND_PIECEWISE` (breakable, auto-on for Qwen4Exp) |
+| GPU residency | ~89 GiB observed at boot |
 
-v16b on one GB10 with the promoted launch settings. Each throughput figure is the fastest of three rounds on a copy-heavy, low-effort workload with a shared 9,600-token cached prefix, counted as completion tokens per second over the window in which all streams are decoding. [Method and per-round data](docs/BENCHMARKS.md#measured-peak-rates).
+## Measured speed
 
-| Streams | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Peak aggregate decode, tok/s | **74.1** | 110.0 | 132.9 | 155.5 | 175.8 | 191.5 | 205.8 | **212.2** |
+2026-10-19, single stream, 5 prompt types × 2 runs against the chat API:
 
-<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/throughput-dark.svg"><img src="docs/assets/throughput-light.svg" alt="Measured peak copy-heavy decode throughput at one through eight streams" width="900"></picture></p>
+| Task (completion tok/s) | Spec off | DFlash2 ×3 |
+|---|---:|---:|
+| Q&A (~195 tok) | ~30.8 | 57–59 |
+| Code (188 tok) | ~30.7 | 67–68 |
+| JSON (~848 tok) | ~31.0 | 69–71 |
+| Math (9 tok) | ~25–30 | ~29–30 |
+| LongCode (2048 tok) | ~30.9 | 70–71 |
 
-Cold prefill, with nothing cached, is 2× to 3.4× faster than the original recipe on the same GB10. Each rate is prompt tokens divided by cold time to first token, three repeats per cell, so it slightly understates pure prefill speed. [Method and data](docs/BENCHMARKS.md#cold-prefill).
+Two findings from the same session:
 
-| Cold prompt | 16k | 64k | 128k |
-|---|---:|---:|---:|
-| v16b prefill, tok/s | **4,016** | **2,426** | **2,213** |
-| Original recipe prefill, tok/s | 1,171 | 1,071 | 1,065 |
-| Increase | **+243%** | **+127%** | **+108%** |
-
-| Measure | v16b | Conditions |
-|---|---:|---|
-| Decode step time | **52.33 ms** | Agent-shaped coding workload with thinking and tools; upstream base: 68.276 ms |
-| Emitted tokens per target step | **3.69** | Median, copy-heavy workload, one stream |
-| Time to first token, warm | **0.57 s** | Cached coding prompt |
-| Time to first token, cold | **27.0 s** | 64k-token prompt, three repeats |
-| Fixed-suite evaluation | **458/492** and **459/492** | 93.09% and 93.29%; seeds 20260908 and 20260910 |
-| Long generation | **21/24** and **22/24** | Two readings, 12,000-token cap |
-| Teacher-forced top-1 agreement delta | **−0.06 pp** | Pre-registered control band: 0.15 pp |
-| KV pool / configured context | **16 GB / 262,144 tokens** | Promoted launch settings |
-| Input | **Text, image and video** | The vision encoder is kept; checked with image and video requests on v16b |
-| Model residency / available memory | **~71 GiB / 16.5 GiB** | Base recipe residency / v16b capacity-run low-water |
-
-On the agent-shaped workload, v16b spends 23% less time per decode step than the upstream base, or 1.30× as many steps per second. [Benchmark method](docs/BENCHMARKS.md) · [Evaluation](docs/EVALS.md).
+- **Full-graph vs piecewise graphs are identical within noise**, spec-off and
+  spec-on. The graph-capturable RDMA lookup is kept because it is correct and
+  costs nothing, not because it is faster — at batch 1 the bottleneck is MoE
+  compute, not kernel launches.
+- **Correctness over exact token-match.** Greedy (temp 0) outputs share
+  100+ token identical prefixes with the Python-lookup baseline; the only
+  divergences sit at exact 50/50 (`dans`/`au`, −0.693 nats each) sampling
+  ties where any BF16 noise flips the pick. Wrong PLE rows would derail
+  generation immediately, not produce coherent paraphrases.
 
 ## Requirements
 
-- One NVIDIA GB10 with about 121 GB of unified memory, ARM64 Linux, Docker and the NVIDIA container runtime.
-- A driver compatible with the pinned CUDA 13.0 image. Check `nvidia-smi` and a GPU container before building.
-- Local storage, preferably NVMe, for the checkpoint, FP8 PLE table, downloads and Docker layers (about 130 GB free for the upstream checkpoint and table), plus about 4.8 GiB for the T80 drafter shard data.
-- Python 3, the Hugging Face `hf` CLI, `jq`, GNU `md5sum` and `sha256sum`.
+- One GB10, ARM64 Linux, Docker + NVIDIA container runtime, `/dev/infiniband`
+  (RoCE device, default `roceP2p1s0f0`) with unlimited memlock.
+- wtako's `ple_rdma_server` reachable at `192.168.0.1:18515` with the FP8
+  table. vLLM aborts at boot without it; the launchers wait first.
+- Local paths for the hybrid checkpoint and the DFlash2 drafter (defaults in
+  `serve-magi.sh` point at shared storage).
 
 ## Quick start
 
-### With a coding agent
-
-Run a coding agent that can use a terminal on your everyday computer, and paste this prompt. The agent connects to your GB10 over SSH and does the setup there. Set up key-based SSH login to the GB10 first.
-
-```text
-Set up the Qwen3.8 Flash DGX UltraFast recipe on my GB10 over SSH.
-Read https://raw.githubusercontent.com/dime-online/qwen3.8-Flash-DGX-UltraFast/main/AGENTS.md and follow it exactly.
-Ask me how to reach the GB10, run the read-only checks, show me what you found, and get my approval before you install, download, build or launch anything.
-```
-
-The agent first checks the GB10's hardware, memory, disk, Docker and port 8000 without changing anything. It then asks for your approval before each of five steps: getting the repository and tools, downloading about 130 GB of public model files, building the image, building the drafter directory, and launching the server. Long steps run in the background on the GB10, so a dropped connection doesn't interrupt them. The agent never stops or removes anything that was already running. [AGENTS.md](AGENTS.md) has the full instructions.
-
-### Manual
-
-Download the pinned public checkpoint and PLE table, build the image and the T80 drafter directory, then launch v16b and send a test request. [BUILD.md](docs/BUILD.md) has the reference hashes, build report and what each step checks.
-
 ```bash
-# Clone and install the Hugging Face CLI
-git clone https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast.git
-cd qwen3.8-Flash-DGX-UltraFast
-python3 -m venv recipe/.venv
-. recipe/.venv/bin/activate
-pip install --upgrade huggingface_hub
+git checkout magi-v3
+cd recipe/build/image
+docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-v032 .
+cd ../../..
+bash serve-magi.sh --print   # inspect the docker command
+bash serve-magi.sh           # start qwen38-flash on :8000 (detached)
 
-# Download the pinned checkpoint and FP8 PLE table
-mkdir -p "$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid" "$HOME/models/ple-table-fp8"
-hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid \
-  --revision 8b82f0b7abe3d1150a7827d298c75e86267636ae \
-  --local-dir "$HOME/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid"
-hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 \
-  --revision 50511b0a41aa1d34b8beb7e5d4bb06a0b650dc14 \
-  --local-dir "$HOME/models/ple-table-fp8"
-
-# Build the image, then the T80 dense-MTP drafter directory
-bash recipe/build/image/build.sh --run
-bash recipe/build/model/build.sh --run
-
-# Show the full docker command, then start the server (runs detached)
-bash recipe/config/v16b/launch.sh --print
-bash recipe/config/v16b/launch.sh --run
-
-# Wait for the server to load, then send a test request
 until curl -fsS http://localhost:8000/v1/models >/dev/null 2>&1; do sleep 10; done
 curl -fsS http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"qwen","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":512}'
 ```
 
-Follow startup with `docker logs -f qwen38-flash`. The server exposes an OpenAI-compatible API on port 8000 under the model name `qwen`. It accepts text, images (`image_url`) and video (`video_url`), since the recipe keeps the model's vision encoder. Audio input is not supported. The T80 builder converts nine drafter modules at group size 32; its reference conversion took 4.626 s after download and wrote 5,118,048,680 new bytes.
-
-> **Running on your own GB10?** If the recipe helped, a ⭐ helps other Spark owners find it, and your numbers are welcome as a [benchmark submission](https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast/issues/new?template=benchmark_submission.md).
+Follow startup with `docker logs -f qwen38-flash`. Expect: PLE RDMA hello
+(320001536 rows, scale ~1.99e-04), DFlash capture on mid-model aux layers,
+`Graph capturing finished`, then `/health` 200.
 
 ## Configuration
 
-The promoted launch pins `GPU_MEM=0.01`, `KV_BYTES=16g`, `SEQS=8`, `CTX=262144`, MTP depth 3, block rejection with probabilistic draft sampling, and prefix caching. `launch.sh` sources [`recipe/config/v16b/env`](recipe/config/v16b/env) under a cleared environment, so edit that file rather than exporting variables. Changing any pinned value produces a new variant whose speed and quality must be measured separately. [Configuration reference](docs/CONFIGURATION.md).
+`serve-magi.sh` defaults; override via environment. `SPEC=mtp` keeps the old
+MTP path, `SPEC=0` disables speculation.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SPEC` / `NSPEC` | `dflash` / `3` | Speculative method (`mtp`, `dflash`, `0`) and draft tokens |
+| `MODEL_DIR` / `DRAFT_DIR` | shared-storage paths | Target checkpoint / DFlash2 drafter (drafter mounted at `/drafter` only for `dflash`) |
+| `PLE_RDMA` | `192.168.0.1:18515` | Table server; unset reverts to local-table behavior |
+| `VLLM_PLE_RDMA_DEV` / `_GID` | `roceP2p1s0f0` / `auto` | RDMA device and GID index |
+| `VLLM_PLE_RDMA_GRAPH` | `1` | `1`: graph-capturable host-func lookup; `0`: Python eager-break path |
+| `CG_MODE` | `FULL_AND_PIECEWISE` | vLLM CUDA-graph mode |
+| `KV_BYTES` / `SEQS` | `18g` / `16` | KV pool bytes / max sequences (18g is the post-OOM value) |
+| `VLLM_FP8_HYBRID` | `1` | INT4 + blockwise-FP8 hybrid dispatch + QSA indexer fix |
+| `PIN_PROMPT` | Magi AI prompt | Marker substring: a request containing it gets its prompt-prefix KV blocks pinned (never evicted, 25% pool cap) |
+| `VLLM_MARLIN_USE_ATOMIC_ADD` | `1` | MoE GEMM backend workaround |
+| `VLLM_USE_DEEP_GEMM` / `VLLM_USE_FLASHINFER_SAMPLER` | `0` / `1` | GEMM and sampler backend selection |
+
+Gotcha: `VLLM_PLE_RDMA_GRAPH=0` with `FULL_*` graphs **crashes graph
+capture** (`Cannot copy between CPU and CUDA tensors … unless pinned`) — the
+Python path forces piecewise, so pair it with `CG_MODE=PIECEWISE`.
 
 ## How it works
 
 ```text
-AutoRound INT4 experts + FP8 side layers + INT8 output head
+INT4 experts + block-FP8 sides + INT8 head (table-stripped hybrid)
              │
-             ├── FP8 PLE table, read by mmap from storage
-             ├── MTP depth 3, 65,536-id draft vocabulary, dense drafter head
-             └── fast PLE gather + piecewise CUDA graphs + prefix cache
+             ├── PLE rows: one-sided RDMA READs from wtako (no local table)
+             │     graph path: ids → pinned host buf → cuLaunchHostFunc READ
+             │     → rows back to GPU, all inside the CUDA graph
+             ├── DFlash2 drafter ×3, verified by the target (block rejection)
+             └── FULL+PIECEWISE graphs + prefix cache + chunked prefill
                          ↓
-                vLLM verifier and sampler → response
+                vLLM 0.32 verifier and sampler → response
 ```
 
-**Target precision.** AutoRound W4A16 packs the routed-expert weights to four bits with 16-bit activations. FP8 side layers and an INT8 output head keep the nonexpert paths at eight bits, where 3-bit GGUF and NVFP4 recipes compress target weights further. The FP8 PLE table is memory-mapped from storage rather than held entirely in GPU memory, which leaves room for the 16 GB KV pool.
-
-**Drafting.** The dense T80 MTP drafter proposes three tokens per step. A 65,536-id draft vocabulary and FP8 drafter experts make each proposal cheaper. The target verifies every drafted token with block rejection, so the drafter changes speed, not the output distribution. Unlike n-gram copy speculation, which needs a matching earlier span, the MTP head drafts from the model itself and also covers original code, reasoning and tool output.
-
-**Per-step overhead.** A low-latency SM12x GEMM, a sort-free verify-path top-k and piecewise CUDA graphs trim compute, selection and launch overhead around each target pass. The image runs vLLM's V2 model runner, where async scheduling is on by default with MTP, and adds an asynchronous short-convolution host-to-device transfer, guarded recurrent-state alignment and retained draft prefix-cache blocks.
-
-[Architecture and build provenance](docs/ARCHITECTURE.md).
-
-## Benchmarks and evaluation
-
-- **Stream curve.** Three rounds at each of 1 to 8 streams on the copy-heavy workload, reported as peak and median, with tokens per step and time to first token. The five-stream point was measured in two sessions. [Runner](recipe/benchmarks/bench_copy_streams.py) · [results](docs/BENCHMARKS.md#measured-peak-rates) · [raw records](docs/results/).
-- **Agent-shaped decode.** Cached long system prefix, tool schemas, six coding tasks, three repeats each, 1,500 generated tokens, thinking on. [Step-time comparison](docs/BENCHMARKS.md#agent-shaped-decode).
-- **Quality.** A fixed 492-item suite (code with execution checks, math, knowledge, instruction following, tool calls, long-context needles), a 24-item long-generation arm and a teacher-forced prefill comparison. [Evaluation](docs/EVALS.md).
+- **RDMA lookup** (`src/vllm_ple_rdma_v032.py` + `src/ple_rdma/ple_rdma_graph.c`
+  → `libple_rdma_graph.so`). Replaces both 0.32 PLE backends with a
+  table-less embedding. Failed READs close the dead QP, redial every 2 s and
+  retry; the engine stalls meanwhile, never silently wrong rows. Out-of-range
+  ids (padding, warm-up garbage) become zero rows.
+- **DFlash2 capture** (`src/vllm_qwen4exp_dflash_capture.py`). Ports the model
+  card's SGLang patch: completed mid-model layer outputs averaged over the 4
+  hyper-connection streams, with vLLM's delayed HC combine materialised for
+  capture only. Plus the `dflash` allow-list for Qwen4Exp.
+- **QSA indexer fix** (`src/vllm_qsa_indexer_fp8.py`). 0.32 fuses
+  `indexer.index_qk_proj` into `qkv_proj` and rejects mixed-precision fused
+  layers; the small BF16 indexer weight (640×2560 per QSA layer) is quantised
+  to 128×128-block FP8 e4m3 at load. No checkpoint change.
+- **Never-evict pin** (`src/patch_never_evict_v032.py`, build-time). Requests containing `PIN_PROMPT` get their prefix KV blocks held out of the free pool (hash-keyed, survives mamba/GDN mid-request frees). Verified live: 8 blocks / 25 MiB held across 6 of 7 KV groups.
+- **Carried over**: FLA GB10 shmem/warps fixes, INT8 `lm_head` wiring,
+  INT4+FP8 hybrid dispatch (`src/vllm_fp8_hybrid.py`).
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| [`AGENTS.md`](AGENTS.md) | Step-by-step instructions for a coding agent to set up the recipe on a GB10 over SSH, with your approval at each step |
-| [`recipe/config/v16b/`](recipe/config/v16b/) | Promoted launcher, `env`, image tag and draft vocabulary ids |
-| [`recipe/build/image/`](recipe/build/image/) | Staged iter6c and iter6d Dockerfiles, patches, hash preflight and CPU tests |
-| [`recipe/build/model/`](recipe/build/model/) | T80 dense-MTP g32 checkpoint builder, tests and reference report |
-| [`recipe/benchmarks/`](recipe/benchmarks/) | Stream-curve, agent-shaped and standalone decode benchmark scripts |
-| [`docs/`](docs/) | [Build](docs/BUILD.md), [configuration](docs/CONFIGURATION.md), [architecture](docs/ARCHITECTURE.md), [benchmarks](docs/BENCHMARKS.md), [evaluation](docs/EVALS.md), [changelog](docs/CHANGELOG.md) and [result tables](docs/results/) |
+| [`serve-magi.sh`](serve-magi.sh) | 0.32 launcher (this stack). `SPEC=mtp\|dflash\|0`, `--print` to preview |
+| [`recipe/build/image/Dockerfile.v032`](recipe/build/image/Dockerfile.v032) | Image build: base pin, FLA fixes, hybrid dispatch, RDMA libs, capture + QSA patches, allow-list |
+| [`recipe/build/image/src/vllm_ple_rdma_v032.py`](recipe/build/image/src/vllm_ple_rdma_v032.py) | 0.32 RDMA embedding (graph + Python paths) |
+| [`recipe/build/image/src/ple_rdma/`](recipe/build/image/src/ple_rdma/) | `ple_rdma.c` (shared READ helper) + `ple_rdma_graph.c` (host-func) |
+| [`recipe/build/image/src/vllm_qwen4exp_dflash_capture.py`](recipe/build/image/src/vllm_qwen4exp_dflash_capture.py) | DFlash2 target-feature capture |
+| [`recipe/build/image/src/vllm_qsa_indexer_fp8.py`](recipe/build/image/src/vllm_qsa_indexer_fp8.py) | QSA indexer load-time FP8 |
+| [`recipe/`](recipe/) `docs/` `AGENTS.md` | Upstream v16b recipe material, retained for reference |
 
-## magi-v3 production fork
+## Ops
 
-This branch (`magi-v3`) is the recipe above **plus** the PLE-over-RDMA port
-from the `magi` line, serving production on a GB10 with wtako holding the
-table. Everything upstream still applies; the deltas are:
+Production is supervised from the sibling `magi-stack` repo:
+`ram-client-ple.sh` waits for wtako `:18515`, then execs `serve-magi.sh`.
+The 0.32 stack above was validated 2026-10-19 as a test container
+(`qwen38-flash` on `:8000`, `RESTART=no`), then cut over as the supervised production launcher.
+The bench/greedy test scripts used for the
+numbers above live next to the supervisor logs, not in this repo.
 
-- **PLE table over RDMA (exclusive).** `recipe/build/image/src/vllm_ple_rdma.py`
-  (+ `libple_rdma.so`, built in `Dockerfile.iter6d`) fetches rows with
-  one-sided READs from `ple-rdma-server` on wtako (`VLLM_PLE_RDMA`, default
-  `192.168.0.1:18515`). With it set, no table is mmapped locally, failed
-  READs retry/stall, and the mmap knobs (`PREWARM`, `PREFETCH`, `FAST_PATH`)
-  are ignored. Same hook architecture as the mmap patch (same class, same
-  `vllm::ple_mmap_lookup` op, same `prepare_inputs` prefetch pattern), so the
-  rendezvous anchors and CPU gates are unaffected.
-- **Two serving toggles.** `T80` (default 1: `...-hybrid-mtpdense-g32`, else
-  the base hybrid; explicit `MODEL_DIR` wins) and `DRAFT_VOCAB` (default 1:
-  the 65,536-id slice; `0` scores the full 248,320-id head — production runs
-  `0` for CJK draft acceptance at ~458 MiB extra head read per draft pass).
-- **Watchdog entrypoint.** `serve-magi.sh` (called by the supervisor's
-  `ram-client-ple.sh`) waits for `:18515`, pins the production image,
-  RDMA-exclusive flags, `DRAFT_VOCAB=0`, KV bytes and the never-evict pin
-  prompt, then execs the recipe serve script.
-- **Combined T80+int4 checkpoint.** Production serves
-  `...-hybrid-mtpdense-g32-mtpint4`: the T80 g32 sides plus magi's int4 g128
-  routed experts. Requires one routing fix in its `config.json`: an explicit
-  `+:.*\.mlp\.experts$` int4 rule ahead of T80's `-:.*\bmtp\..*` guard,
-  otherwise the experts fall into the unquantized path and the fp8 arm builds
-  the wrong parameters (`AttributeError: no parameter 'w2_qweight'`).
+## Upstream
 
-The published benchmark numbers above are upstream v16b (mmap table, 65k
-cut). magi-v3 production differs (RDMA table, full head, combined
-checkpoint), so re-measure with `recipe/benchmarks/` before comparing.
+Base recipe: [dime-online/qwen3.8-Flash-DGX-UltraFast](https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast)
+(v16b, MTP + dense drafter + mmap table, GB10). Its benchmark tables,
+`docs/BENCHMARKS.md`, `docs/EVALS.md` and `AGENTS.md` describe that stack,
+not this branch. This branch's own deltas are exactly: the 0.32 port files
+listed above, the RDMA-exclusive table, DFlash2 instead of MTP+T80, and
+`KV_BYTES` 16g → 18g.
 
 ## Credits and licenses
 
-The base recipe derives from [Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound), Apache-2.0, copyright blazux. Thanks to the Qwen model authors and to the vLLM, Intel AutoRound and FlashInfer contributors. Model weights and downloaded datasets keep their own terms.
+Base recipe derives from
+[Saren-Arterius/qwen3.8-Flash-DGX-AutoRound](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound),
+Apache-2.0, copyright blazux; via dime-online's UltraFast recipe. Thanks to
+the Qwen model authors and to the vLLM, Intel AutoRound and FlashInfer
+contributors. Model weights and downloaded datasets keep their own terms.
 
-Everything in this repository, code, docs, data and images, is licensed under **Apache-2.0**, the same license as the upstream recipe. You can use, modify and redistribute it, including commercially. If you redistribute it, keep the [NOTICE](NOTICE) file, which credits **dime-online** and the upstream authors. See [LICENSE](LICENSE).
+Everything in this repository — code, docs, data and images — is licensed
+under **Apache-2.0**. If you redistribute it, keep the [NOTICE](NOTICE) file,
+which credits **dime-online** and the upstream authors. See [LICENSE](LICENSE).
 
 ## Citation
 
-GitHub's "Cite this repository" menu reads [CITATION.cff](CITATION.cff).
+GitHub's "Cite this repository" menu reads [CITATION.cff](CITATION.cff)
+(which describes the upstream v16b recipe).
 
 ```bibtex
 @software{dime_online_qwen38_gb10_v16b,
@@ -195,7 +188,3 @@ GitHub's "Cite this repository" menu reads [CITATION.cff](CITATION.cff).
   url = {https://github.com/dime-online/qwen3.8-Flash-DGX-UltraFast}
 }
 ```
-
-## Draft vocabulary note
-
-The MTP drafter proposes tokens from a bundled 65,536-id draft vocabulary built from English and code text. Output in other languages, notably CJK, gets lower draft acceptance and therefore lower decode speed; upstream reports the same effect for its own English/code-weighted set. Output quality is unaffected, because the target model verifies every drafted token with block rejection. See [Configuration](docs/CONFIGURATION.md#draft-vocabulary) for details.

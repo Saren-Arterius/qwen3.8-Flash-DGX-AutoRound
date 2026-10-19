@@ -1,48 +1,51 @@
 #!/usr/bin/env bash
-# magi-v3 production serving — ultrafast fork (v16b) + PLE-over-RDMA port.
-# Tunables live in recipe/config/v16b/env; this wrapper pins magi's
-# production choices: RDMA-exclusive fp8 PLE rows from wtako's
-# ple-rdma-server (:18515), image qwen38-flash-dgx:magi-v3, container
-# qwen38-flash on :8000 as "qwen". Called by ~/magi-stack/ram-client-ple.sh
-# (watchdog). Forwards args (e.g. --print) to the recipe serve script.
+# magi-v3 on vLLM 0.32.0 — production flags of serve-magi.sh / v16b, re-expressed
+# for 0.32 (Qwen4Exp: breakable cudagraphs auto-on, so no splitting_ops list).
+# SPEC=mtp (default, magi-v3 parity) | dflash (incoai DFlash2 drafter) | 0.
+# Usage: serve-magi.sh [--print]
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
 
-# vLLM aborts at boot if the table daemon is unreachable — wait here so the
-# supervisor's warm timeout isn't burned on a crash loop. NOTE
-# ram-client-ple.sh still waits on :18516 (NVFP4) first; flip that wait to
-# :18515 when the NVFP4 server is retired.
-until timeout 2 bash -c '</dev/tcp/192.168.0.1/18515' 2>/dev/null; do
-  echo "serve-magi.sh: waiting for ple-rdma-server on wtako:18515..."
-  sleep 5
-done
+IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-v032}"
+NAME="${NAME:-qwen38-flash}"
+PORT="${PORT:-8000}"
+AI=/mnt/storage@WTAKO/saren/AI
+MODEL_DIR="${MODEL_DIR:-$AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid}"
+DRAFT_DIR="${DRAFT_DIR:-$AI/Qwen3.8-Flash-Next-DFlash2}"
+PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
+KV_BYTES="${KV_BYTES:-18g}"
+SEQS="${SEQS:-16}"
+SPEC="${SPEC:-dflash}"
+NSPEC="${NSPEC:-3}"
+PIN_PROMPT="${PIN_PROMPT:-You are \"Magi AI\", a smart home AI (via Home Assistant) and general knowledge assistant.}"
 
-export IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3}"
-export NAME="${NAME:-qwen38-flash}"
-export PORT="${PORT:-8000}"
-export SERVED_NAME="${SERVED_NAME:-qwen}"
-# RDMA-exclusive: no local table mount (TABLE_DIR="" is meaningful; an
-# explicit TABLE_DIR still selects mmap mode).
-export TABLE_DIR="${TABLE_DIR:-}"
-export PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
-# magi production: full draft head (DRAFT_VOCAB=0, CJK acceptance over the
-# 65k cut) + T80 dense drafter on (takes effect once the T80 dir exists).
-export DRAFT_VOCAB="${DRAFT_VOCAB:-0}"
-export T80_DIR="${T80_DIR:-/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid-mtpdense-g32-mtpint4}"
-export KV_BYTES="${KV_BYTES:-20g}"
-export PREFIX_CACHE="${PREFIX_CACHE:-1}"
-export PIN_PROMPT='You are "Magi AI", a smart home AI (via Home Assistant) and general knowledge assistant.'
-export SEQS="${SEQS:-16}"
+SPEC_ARGS=() DRAFT_MOUNT=()
+case "$SPEC" in
+  mtp)    SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$NSPEC,\"rejection_sample_method\":\"block\",\"draft_sample_method\":\"probabilistic\"}") ;;
+  dflash) DRAFT_MOUNT=(-v "$DRAFT_DIR:/drafter:ro")
+          SPEC_ARGS=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/drafter\",\"num_speculative_tokens\":$NSPEC}") ;;
+  0)      ;;
+  *) echo "SPEC must be mtp|dflash|0" >&2; exit 64 ;;
+esac
 
-# Fallback bridge: while the T80 dir is absent, serve magi's mtpint4 hybrid
-# (same family; boots this stack, minus the dense drafter).
-# TEMPORARY bridge: the T80 dir isn't built yet — serve magi's mtpint4 hybrid
-# (same family; boots this stack, minus the dense drafter) until
-# $T80_DIR exists, when the T80 toggle default takes
-# over. TODO: delete this block after the T80 build lands.
-if [ -z "${MODEL_DIR:-}" ] && [ ! -d "$T80_DIR" ]; then
-  echo "serve-magi.sh: T80 dir absent, serving mtpint4 bridge checkpoint" >&2
-  export MODEL_DIR=/mnt/storage@WTAKO/saren/AI/Qwen3.8-Flash-Next-W4A16-AutoRound-mtpint4
-fi
+RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
+  --gpus all --ipc=host --shm-size 16g -p "$PORT:8000"
+  --device /dev/infiniband --ulimit memlock=-1:-1
+  -v "$MODEL_DIR:/model:ro" "${DRAFT_MOUNT[@]}"
+  -e VLLM_PLE_RDMA="$PLE_RDMA" -e VLLM_PLE_RDMA_DEV=roceP2p1s0f0 -e VLLM_PLE_RDMA_GID=auto
+  -e VLLM_PLE_RDMA_PREFETCH=0 -e VLLM_PLE_RDMA_GRAPH="${PLE_GRAPH:-1}"
+  -e VLLM_FP8_HYBRID=1 -e VLLM_MARLIN_USE_ATOMIC_ADD=1
+  -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_FLASHINFER_SAMPLER=1
+  "$IMAGE"
+  /model --served-model-name qwen --host 0.0.0.0 --port 8000
+  --load-format fastsafetensors --max-model-len 262144 --max-num-seqs "$SEQS"
+  --gpu-memory-utilization 0.01 --kv-cache-memory-bytes "$KV_BYTES"
+  --enable-prefix-caching --enable-chunked-prefill --max-num-batched-tokens 8192
+  -cc.cudagraph_mode="${CG_MODE:-FULL_AND_PIECEWISE}" --no-enable-flashinfer-autotune --kv-cache-dtype auto --enable-prompt-tokens-details
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3
+  --never-evict-kv-cache-prompt-includes "$PIN_PROMPT" \
+  "${SPEC_ARGS[@]}")
 
-exec recipe/config/v16b/serve.sh "$@"
+[ "${1:-}" = --print ] && { printf '%q ' "${RUN[@]}"; echo; exit 0; }
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+"${RUN[@]}"
+echo ">> $NAME on :$PORT (vLLM 0.32, spec=$SPEC/$NSPEC, kv=$KV_BYTES)"

@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+# magi-v3 on vLLM 0.32.0 (phase 1: boot-critical patches + DFlash2 capture).
+# 0.32.0 ships Qwen4Exp (Flash-Next) and DFlash2 (vllm#52816) natively; the
+# magi-v3 iter6c/iter6d patches are re-ported here one at a time.
+# Build from recipe/build/image:
+#   docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-v032 .
+FROM vllm/vllm-openai:v0.32.0@sha256:befccf0e7e4089aa23926bb6f887a85c0d46c2a99e6de5c5ffdf5cb7957c5b34
+
+ARG SP=/usr/local/lib/python3.12/dist-packages
+ARG QX=${SP}/vllm/models/qwen4_exp/nvidia
+
+# FLA on GB10 (unchanged from iter6c): 99 KiB smem gate + fla#953 tl.dot race.
+ARG FLA=${SP}/vllm/third_party/flash_linear_attention/ops
+RUN sed -i 's|DEFAULT = 102400|DEFAULT = 101376  # spark-fla-shmem: GB10 99KiB = ADA, big GDN tiles fit|' ${FLA}/utils.py \
+ && grep -q "spark-fla-shmem" ${FLA}/utils.py \
+ && sed -i 's|for num_warps in \[2, 4\]|for num_warps in [2]  # spark-fla-warps: fla#953 Blackwell tl.dot race|' ${FLA}/chunk_delta_h.py \
+ && grep -q "spark-fla-warps" ${FLA}/chunk_delta_h.py && echo "fla patched"
+
+# int8 GPTQ lm_head (unchanged anchors from iter6c, new module path).
+RUN sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n            prefix=maybe_prefix(prefix, "lm_head"),|' ${QX}/model.py \
+ && sed -i 's|prefix=maybe_prefix(prefix, "lm_head"),|quant_config=vllm_config.quant_config,\n                    prefix=maybe_prefix(prefix, "lm_head"),|' ${QX}/mtp.py \
+ && grep -c 'quant_config=vllm_config.quant_config' ${QX}/model.py ${QX}/mtp.py
+
+# int4 + blockwise-fp8 hybrid dispatch (unchanged module).
+COPY src/vllm_fp8_hybrid.py ${SP}/vllm_fp8_hybrid.py
+RUN printf '\n\n# --- qwen38-flash-dgx: int4+fp8 hybrid dispatch (VLLM_FP8_HYBRID=1) ---\nfrom vllm_fp8_hybrid import apply as _fp8_hybrid_apply\n_fp8_hybrid_apply()\n' \
+      >> ${SP}/vllm/model_executor/layers/quantization/auto_gptq.py
+
+# PLE rows over RDMA: unchanged libple_rdma.so + RdmaPleTable (+ vllm_ple_mmap
+# for its stats dict), wired into 0.32's PLE backend seam by the v032 adapter.
+COPY src/ple_rdma/ple_rdma.c src/ple_rdma/ple_rdma_graph.c /tmp/
+RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs -o ${SP}/libple_rdma.so \
+ && gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma_graph.c -libverbs -o ${SP}/libple_rdma_graph.so \
+ && rm /tmp/ple_rdma*.c
+COPY src/vllm_ple_mmap.py src/vllm_ple_rdma.py src/vllm_ple_rdma_v032.py ${SP}/
+RUN printf '\n\n# --- magi-v3: PLE rows over RDMA (VLLM_PLE_RDMA) ---\nimport sys as _ple_sys\nfrom vllm_ple_rdma_v032 import apply as _ple_rdma_apply\n_ple_rdma_apply(_ple_sys.modules[__name__])\n' \
+      >> ${QX}/ngram_embedding.py
+
+# DFlash/DFlash2 target-feature capture (port of the model card's SGLang patch).
+COPY src/vllm_qwen4exp_dflash_capture.py ${SP}/
+RUN printf '\n\n# --- magi-v3: DFlash target-feature capture ---\nimport sys as _dfc_sys\nfrom vllm_qwen4exp_dflash_capture import apply as _dfc_apply\n_dfc_apply(_dfc_sys.modules[__name__])\n' \
+      >> ${QX}/model.py
+
+# QSA indexer projection -> block FP8 at load: 0.32 fuses it into qkv_proj with
+# the FP8 q/k/v, and rejects mixed-precision fused layers.
+COPY src/vllm_qsa_indexer_fp8.py ${SP}/
+RUN python3 -I ${SP}/vllm_qsa_indexer_fp8.py \
+ && printf '\nfrom vllm_qsa_indexer_fp8 import apply_config as _qif_apply\n_qif_apply()\n' \
+      >> ${SP}/vllm/model_executor/layers/quantization/auto_gptq.py \
+ && printf '\n\nimport sys as _qif_sys\nfrom vllm_qsa_indexer_fp8 import apply_model as _qif_model\n_qif_model(_qif_sys.modules[__name__])\n' \
+      >> ${QX}/model.py
+
+# Allow DFlash/DFlash2 drafters for Qwen4Exp (0.32 allow-lists only mtp/ngram;
+# the capture hook above supplies the target features).
+ARG MC=${SP}/vllm/model_executor/models/config.py
+RUN python3 - ${MC} <<'EOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '"mtp",\n            "ngram",\n            "ngram_gpu",\n        }:'
+assert s.count(old) == 1, "qwen4exp spec guard anchor"
+s = s.replace(old, '"mtp",\n            "ngram",\n            "ngram_gpu",\n            "dflash",  # qwen4exp-dflash-allow\n        }:')
+open(p, "w").write(s); print("qwen4exp dflash allowed")
+EOF
+
+RUN python3 -c "import ast,sys; [ast.parse(open(p).read()) for p in sys.argv[1:]]; print('patched files parse')" \
+      ${QX}/model.py ${QX}/mtp.py ${QX}/ngram_embedding.py ${SP}/vllm/model_executor/layers/quantization/auto_gptq.py
+
+# Never-evict prompt-prefix pin (v032 port; asserts anchors, fails build on drift).
+COPY src/patch_never_evict_v032.py /tmp/
+RUN python3 /tmp/patch_never_evict_v032.py && rm /tmp/patch_never_evict_v032.py
