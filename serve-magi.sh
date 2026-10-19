@@ -22,7 +22,7 @@ SPEC_ARGS=() DRAFT_MOUNT=()
 case "$SPEC" in
   mtp)    SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$NSPEC,\"rejection_sample_method\":\"block\",\"draft_sample_method\":\"probabilistic\"}") ;;
   dflash) DRAFT_MOUNT=(-v "$DRAFT_DIR:/drafter:ro")
-          SPEC_ARGS=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/drafter\",\"num_speculative_tokens\":$NSPEC}") ;;
+          SPEC_ARGS=(--speculative-config "{\"method\":\"dflash\",\"model\":\"/drafter\",\"num_speculative_tokens\":$NSPEC,\"disable_eagle_block_drop\":true}") ;;
   0)      ;;
   *) echo "SPEC must be mtp|dflash|0" >&2; exit 64 ;;
 esac
