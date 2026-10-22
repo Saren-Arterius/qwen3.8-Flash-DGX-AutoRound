@@ -19,7 +19,7 @@ numbers; they do not apply to this stack.
 | Piece | Value |
 |---|---|
 | Base image | `vllm/vllm-openai:v0.32.0` (pinned sha256, see `Dockerfile.v032`) |
-| Built image | `qwen38-flash-dgx:magi-v3-public` |
+| Built image | `qwen38-flash-dgx:magi-v5-public` |
 | Target checkpoint | `Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid`, table-stripped GPTQ: INT4 routed experts, blockwise-FP8 side layers, INT8 `lm_head` |
 | Drafter | `Qwen3.8-Flash-Next-DFlash2` (vLLM native `dflash`, EAGLE3-style) |
 | Context / KV / streams | 262144 tokens, `KV_BYTES=20g`, `SEQS=16`, prefix cache + chunked prefill on |
@@ -138,7 +138,7 @@ hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 \
 # SPEC=mtp with an MTP-grafted checkpoint), or point DRAFT_DIR at
 # your own drafter.
 cd recipe/build/image
-docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-public .
+docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v5-public .
 cd ../../..
 bash serve-magi.sh --print   # inspect the docker command
 bash serve-magi.sh           # start qwen38-flash on :8000 (detached)

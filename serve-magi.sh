@@ -15,7 +15,7 @@
 #   Note: dflash+YARN is wired but not yet booted; SPEC=0 is the safer 1M arm.
 set -euo pipefail
 
-IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-public}"
+IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v5-public}"
 NAME="${NAME:-qwen38-flash}"
 PORT="${PORT:-8000}"
 # Model homes (generic defaults; see README for download instructions).
