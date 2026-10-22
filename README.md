@@ -72,6 +72,32 @@ bf16 at 416-token blocks: 531k->1.10M); compressed-indexer fp8 patch
 Verdict: bf16 KV stays the default (quality-verified, benched);
 fp8+skip is the documented 1M-context path (needs YaRN past 262k).
 
+Available KV, all measured live (`/health` pool line, dflash x3 unless
+noted, prefix cache on):
+
+| Config @ pool bytes | Tokens | Max concurrency @262k |
+|---|---|---:|
+| bf16 + bf16 SSM @20g (current default) | 688,400 | 2.63x |
+| bf16 + f32 SSM @28g (RDMA era) | 913,532 | 3.48x |
+| fp8 + bf16 SSM + skip-sliding + indexer-fp8 @20g | 1,104,500 | 4.21x |
+| fp8 + bf16 SSM, no skip @20g | 531,009 | 2.03x |
+| fp8 + f32 SSM @20g | 319,655 | 1.22x |
+| fp8, SPEC=0 (no drafter) @20g | 1,494,069 | 5.70x |
+
+A single 1M-token request needs ~1M pool tokens: only the fp8 rows
+qualify at 20g (bf16@20g holds 688k). What to run:
+
+```bash
+# 1M KV cache (1.10M tokens w/ dflash, 1.49M with SPEC=0):
+KV_DTYPE=fp8_e4m3 KV_BYTES=20g bash serve-magi.sh
+# 1M context (YaRN factor-4 rope override + allow-long flag):
+YARN=1 CTX=1000000 bash serve-magi.sh
+# both:
+KV_DTYPE=fp8_e4m3 KV_BYTES=20g YARN=1 CTX=1000000 bash serve-magi.sh
+```
+
+dflash+YARN is wired but not yet booted; SPEC=0 is the safer 1M arm.
+
 Two findings from the same session:
 
 - **Full-graph vs piecewise graphs are identical within noise**, spec-off and

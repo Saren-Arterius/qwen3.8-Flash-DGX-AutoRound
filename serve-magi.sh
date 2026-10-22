@@ -4,6 +4,15 @@
 # PLE n-gram table comes from local SSD (/ple-table-fp8) unless PLE_RDMA
 # is set. Based on serve-magi.sh.
 # Usage: serve-magi.sh [--print]
+#
+# 1M KV cache (pool must hold the request): fp8 cache at 20g or more.
+#   KV_DTYPE=fp8_e4m3 KV_BYTES=20g   # 1.10M tokens w/ dflash, 1.49M SPEC=0;
+#                                    # bf16@20g holds only 688k. VLLM_INDEXER_FP8
+#                                    # (+3%) and sliding_window skip are auto-set.
+# 1M context (past the 262144 native limit): YaRN rope scaling.
+#   YARN=1 CTX=1000000               # factor-4 rope override + allow-long flag.
+#   Full example: KV_DTYPE=fp8_e4m3 KV_BYTES=20g YARN=1 CTX=1000000 bash serve-magi.sh
+#   Note: dflash+YARN is wired but not yet booted; SPEC=0 is the safer 1M arm.
 set -euo pipefail
 
 IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-public}"
@@ -16,6 +25,8 @@ DRAFT_DIR="${DRAFT_DIR:-$AI/Qwen3.8-Flash-Next-DFlash2}"
 PLE_RDMA="${PLE_RDMA:-}"
 TABLE_DIR="${TABLE_DIR:-$HOME/ple-table-fp8}"
 KV_BYTES="${KV_BYTES:-20g}"
+CTX="${CTX:-262144}"
+YARN="${YARN:-0}"
 SEQS="${SEQS:-16}"
 CPUSET="${CPUSET:-5-9,15-19}"
 MAMBA_SSM_DTYPE="${MAMBA_SSM_DTYPE:-bfloat16}"
@@ -25,6 +36,10 @@ SPEC="${SPEC:-dflash}"
 NSPEC="${NSPEC:-3}"
 PIN_PROMPT="${PIN_PROMPT:-You are \"Magi AI\", a smart home AI (via Home Assistant) and general knowledge assistant.}"
 
+YARN_OVR='{"text_config": {"rope_parameters": {"mrope_interleaved": true, "mrope_section": [11, 11, 10], "rope_type": "yarn", "rope_theta": 10000000, "partial_rotary_factor": 0.25, "factor": 4.0, "original_max_position_embeddings": 262144}}}'
+YARN_ARGS=()
+ALLOW_LONG=()
+if [ "$YARN" != 0 ]; then YARN_ARGS=(--hf-overrides "$YARN_OVR"); ALLOW_LONG=(--allow-long-max-model-len); fi
 SPEC_ARGS=() DRAFT_MOUNT=()
 case "$SPEC" in
   mtp)    SPEC_ARGS=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$NSPEC,\"rejection_sample_method\":\"block\",\"draft_sample_method\":\"probabilistic\"}") ;;
@@ -74,8 +89,8 @@ RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
   -e VLLM_FP8_HYBRID=1 -e VLLM_MARLIN_USE_ATOMIC_ADD=1
   -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_FLASHINFER_SAMPLER=1
   "$IMAGE"
-  /model --served-model-name qwen --host 0.0.0.0 --port 8000
-  --load-format fastsafetensors --max-model-len 262144 --max-num-seqs "$SEQS"
+  /model --served-model-name qwen --host 0.0.0.0 --port 8000 --max-model-len "$CTX" "${YARN_ARGS[@]}" "${ALLOW_LONG[@]}"
+  --load-format fastsafetensors --max-num-seqs "$SEQS"
   --gpu-memory-utilization 0.01 --kv-cache-memory-bytes "$KV_BYTES"
   --enable-prefix-caching --enable-chunked-prefill --max-num-batched-tokens 8192
   "${MAMBA_ARGS[@]}"
@@ -88,4 +103,4 @@ RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
 [ "${1:-}" = --print ] && { printf '%q ' "${RUN[@]}"; echo; exit 0; }
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 "${RUN[@]}"
-echo ">> $NAME on :$PORT (vLLM 0.32 public, spec=$SPEC/$NSPEC, kv=$KV_BYTES, ple=${PLE_RDMA:-local:$TABLE_DIR})"
+echo ">> $NAME on :$PORT (vLLM 0.32 public, spec=$SPEC/$NSPEC, kv=$KV_BYTES/$KV_DTYPE, ctx=$CTX$([ "$YARN" != 0 ] && echo "+yarn"), ple=${PLE_RDMA:-local:$TABLE_DIR})"
