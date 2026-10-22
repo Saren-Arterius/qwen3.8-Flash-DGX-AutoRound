@@ -1,3 +1,13 @@
+# NOTE: active development moved to the `magi-v5-public` branch
+
+The vLLM 0.32 + DFlash2 stack (local-SSD PLE via graph-capturable host
+func, fp8-KV/drafter investigation, 1M-context recipe) lives on
+**`magi-v5-public`** - start there (`git checkout magi-v5-public`).
+This page below describes the older main-line recipe and is retained
+for reference.
+
+---
+
 # Qwen3.8-Flash-Next on a single DGX Spark (GB10) — int4 + int8 + fp8 hybrid
 
 Run **Qwen3.8-Flash-Next** — a ~176B-parameter model (125B main + 51B n-gram, 6B
