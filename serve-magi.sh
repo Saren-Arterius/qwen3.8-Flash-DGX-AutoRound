@@ -18,16 +18,11 @@ set -euo pipefail
 IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-public}"
 NAME="${NAME:-qwen38-flash}"
 PORT="${PORT:-8000}"
-# Model homes (generic defaults; see README for download instructions).
-# No public standalone DFlash2 drafter exists - SPEC=dflash needs one at
-# DRAFT_DIR; without it use SPEC=0 (no speculation) or SPEC=mtp (needs MTP
-# layers in the checkpoint).
-MODELS_ROOT="${MODELS_ROOT:-$HOME/models}"
-MODEL_DIR="${MODEL_DIR:-$MODELS_ROOT/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid}"
-DRAFT_DIR="${DRAFT_DIR:-$MODELS_ROOT/Qwen3.8-Flash-Next-DFlash2}"
-# Public default: local SSD. Set PLE_RDMA=<rdma-host>:18515 for a table server.
-PLE_RDMA="${PLE_RDMA:-}"
-TABLE_DIR="${TABLE_DIR:-$MODELS_ROOT/ple-table-fp8}"
+AI=/mnt/storage@WTAKO/saren/AI
+MODEL_DIR="${MODEL_DIR:-$AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid}"
+DRAFT_DIR="${DRAFT_DIR:-$AI/Qwen3.8-Flash-Next-DFlash2}"
+PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
+TABLE_DIR="${TABLE_DIR:-$HOME/ple-table-fp8}"
 KV_BYTES="${KV_BYTES:-20g}"
 CTX="${CTX:-262144}"
 YARN="${YARN:-0}"
