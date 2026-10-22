@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
-# magi-v3 on vLLM 0.32.0 — production flags of serve-magi.sh / v16b, re-expressed
-# for 0.32 (Qwen4Exp: breakable cudagraphs auto-on, so no splitting_ops list).
-# SPEC=mtp (default, magi-v3 parity) | dflash (incoai DFlash2 drafter) | 0.
+# magi-v3-public on vLLM 0.32.0 — SSD mmap default, RDMA optional.
+# Same stack as magi-v3 (Qwen4Exp + DFlash2, FULL_AND_PIECEWISE), but the
+# PLE n-gram table comes from local SSD (/ple-table-fp8) unless PLE_RDMA
+# is set. Based on serve-magi.sh.
 # Usage: serve-magi.sh [--print]
 set -euo pipefail
 
-IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-v032}"
+IMAGE="${IMAGE:-qwen38-flash-dgx:magi-v3-public}"
 NAME="${NAME:-qwen38-flash}"
 PORT="${PORT:-8000}"
 AI=/mnt/storage@WTAKO/saren/AI
 MODEL_DIR="${MODEL_DIR:-$AI/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid}"
 DRAFT_DIR="${DRAFT_DIR:-$AI/Qwen3.8-Flash-Next-DFlash2}"
-PLE_RDMA="${PLE_RDMA:-192.168.0.1:18515}"
-KV_BYTES="${KV_BYTES:-18g}"
+# Public default: local SSD. Set PLE_RDMA=192.168.0.1:18515 for the private RDMA path.
+PLE_RDMA="${PLE_RDMA:-}"
+TABLE_DIR="${TABLE_DIR:-$HOME/ple-table-fp8}"
+KV_BYTES="${KV_BYTES:-20g}"
 SEQS="${SEQS:-16}"
 SPEC="${SPEC:-dflash}"
 NSPEC="${NSPEC:-3}"
@@ -27,12 +30,24 @@ case "$SPEC" in
   *) echo "SPEC must be mtp|dflash|0" >&2; exit 64 ;;
 esac
 
+# PLE source: RDMA (private) or local SSD mmap (public default).
+PLE_ARGS=() PLE_MOUNTS=() PLE_DEVICES=()
+if [ -n "$PLE_RDMA" ]; then
+  PLE_DEVICES=(--device /dev/infiniband)
+  PLE_ARGS=(-e VLLM_PLE_RDMA="$PLE_RDMA" -e VLLM_PLE_RDMA_DEV=roceP2p1s0f0 -e VLLM_PLE_RDMA_GID=auto
+            -e VLLM_PLE_RDMA_PREFETCH=0 -e VLLM_PLE_RDMA_GRAPH="${PLE_GRAPH:-1}")
+else
+  PLE_MOUNTS=(-v "$TABLE_DIR:/ple-table-fp8:ro")
+  PLE_ARGS=(-e VLLM_PLE_MMAP_DIR=/ple-table-fp8
+            -e VLLM_PLE_MMAP_WORKERS="${PLE_WORKERS:-32}" -e VLLM_PLE_MMAP_CHUNK="${PLE_CHUNK:-2048}"
+            -e VLLM_PLE_MMAP_PREWARM="${PLE_PREWARM:-0}")
+fi
+
 RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
   --gpus all --ipc=host --shm-size 16g -p "$PORT:8000"
-  --device /dev/infiniband --ulimit memlock=-1:-1
-  -v "$MODEL_DIR:/model:ro" "${DRAFT_MOUNT[@]}"
-  -e VLLM_PLE_RDMA="$PLE_RDMA" -e VLLM_PLE_RDMA_DEV=roceP2p1s0f0 -e VLLM_PLE_RDMA_GID=auto
-  -e VLLM_PLE_RDMA_PREFETCH=0 -e VLLM_PLE_RDMA_GRAPH="${PLE_GRAPH:-1}"
+  "${PLE_DEVICES[@]}" --ulimit memlock=-1:-1
+  -v "$MODEL_DIR:/model:ro" "${DRAFT_MOUNT[@]}" "${PLE_MOUNTS[@]}"
+  "${PLE_ARGS[@]}"
   -e VLLM_FP8_HYBRID=1 -e VLLM_MARLIN_USE_ATOMIC_ADD=1
   -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_FLASHINFER_SAMPLER=1
   "$IMAGE"
@@ -48,4 +63,4 @@ RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
 [ "${1:-}" = --print ] && { printf '%q ' "${RUN[@]}"; echo; exit 0; }
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 "${RUN[@]}"
-echo ">> $NAME on :$PORT (vLLM 0.32, spec=$SPEC/$NSPEC, kv=$KV_BYTES)"
+echo ">> $NAME on :$PORT (vLLM 0.32 public, spec=$SPEC/$NSPEC, kv=$KV_BYTES, ple=${PLE_RDMA:-local:$TABLE_DIR})"

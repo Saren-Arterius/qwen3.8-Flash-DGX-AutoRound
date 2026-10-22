@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# magi-v3: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2
+# magi-v3-public: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2 (local SSD)
 
 Production serving stack for **Qwen3.8-Flash-Next** on a single NVIDIA DGX
 Spark (GB10). vLLM **0.32.0** with native Qwen4Exp support, **DFlash2**
 speculative decoding (3 draft tokens), and the PLE n-gram table served
-**exclusively over RDMA** from wtako — no local table copy. OpenAI-compatible
+from **local SSD via a graph-capturable mmap host func** — no wtako
+dependency (RDMA remains available via PLE_RDMA). OpenAI-compatible
 API on port 8000 under the model name `qwen`, with tool calling
 (`qwen3_xml`) and reasoning (`qwen3`) parsers enabled.
 
@@ -18,11 +19,11 @@ numbers; they do not apply to this stack.
 | Piece | Value |
 |---|---|
 | Base image | `vllm/vllm-openai:v0.32.0` (pinned sha256, see `Dockerfile.v032`) |
-| Built image | `qwen38-flash-dgx:magi-v3-v032` |
+| Built image | `qwen38-flash-dgx:magi-v3-public` |
 | Target checkpoint | `Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid`, table-stripped GPTQ: INT4 routed experts, blockwise-FP8 side layers, INT8 `lm_head` |
 | Drafter | `Qwen3.8-Flash-Next-DFlash2` (vLLM native `dflash`, EAGLE3-style) |
-| Context / KV / streams | 262144 tokens, `KV_BYTES=18g`, `SEQS=16`, prefix cache + chunked prefill on |
-| PLE table | 320001536 rows × 160 B FP8 over RDMA (`192.168.0.1:18515`), graph-capturable host-func lookup (default) |
+| Context / KV / streams | 262144 tokens, `KV_BYTES=20g`, `SEQS=16`, prefix cache + chunked prefill on |
+| PLE table | 320001536 rows x 160 B FP8 from local SSD (VLLM_PLE_MMAP_DIR, default /ple-table-fp8), graph-capturable host-func memcpy (RDMA optional via PLE_RDMA) |
 | CUDA graphs | `FULL_AND_PIECEWISE` (breakable, auto-on for Qwen4Exp) |
 | GPU residency | ~89 GiB observed at boot |
 
@@ -38,6 +39,23 @@ numbers; they do not apply to this stack.
 | Math (9 tok) | ~25–30 | ~29–30 |
 | LongCode (2048 tok) | ~30.9 | 70–71 |
 
+2026-10-23, same 5 prompts via bench_qwen35.sh x3 against
+magi-v3-public (local SSD, DFlash2 x3). First pass ignored (cold page
+cache: Q&A 44.5, Code 58.5, JSON 63.9, LongCode 64.9); steady-state
+passes 2–3, 4 runs each:
+
+| Task (completion tok/s, public SSD) | DFlash2 x3 | RDMA 10-19 |
+|---|---:|---:|
+| Q&A (~195 tok) | 57.5-60.5 (avg ~58.6) | 57–59 |
+| Code (188 tok) | 67.6-68.8 (avg ~68.3) | 67–68 |
+| JSON (~848 tok) | 68.2-70.9 (avg ~69.6) | 69–71 |
+| Math (9 tok) | ~28-30 (timing noise) | ~29–30 |
+| LongCode (2048 tok) | 69.1-70.0 (avg ~69.5) | 70–71 |
+
+Local SSD is consistent with RDMA within noise (~1 tok/s on LongCode).
+Correctness: Reply with OK. gives OK; greedy outputs coherent (wrong PLE
+rows would derail immediately).
+
 Two findings from the same session:
 
 - **Full-graph vs piecewise graphs are identical within noise**, spec-off and
@@ -52,19 +70,20 @@ Two findings from the same session:
 
 ## Requirements
 
-- One GB10, ARM64 Linux, Docker + NVIDIA container runtime, `/dev/infiniband`
-  (RoCE device, default `roceP2p1s0f0`) with unlimited memlock.
-- wtako's `ple_rdma_server` reachable at `192.168.0.1:18515` with the FP8
-  table. vLLM aborts at boot without it; the launchers wait first.
+- One GB10, ARM64 Linux, Docker + NVIDIA container runtime with unlimited memlock.
+- Local FP8 table dir (default ~/ple-table-fp8, shards 5-37 of the official
+  FP8 checkpoint: 128 shards, 320001536 rows). No /dev/infiniband needed.
+- RDMA remains available: set PLE_RDMA to the wtako server (needs RoCE
+  plus ple_rdma_server); the launcher waits for it.
 - Local paths for the hybrid checkpoint and the DFlash2 drafter (defaults in
   `serve-magi.sh` point at shared storage).
 
 ## Quick start
 
 ```bash
-git checkout magi-v3
+git checkout magi-v3-public
 cd recipe/build/image
-docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-v032 .
+docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-public .
 cd ../../..
 bash serve-magi.sh --print   # inspect the docker command
 bash serve-magi.sh           # start qwen38-flash on :8000 (detached)
@@ -75,9 +94,9 @@ curl -fsS http://localhost:8000/v1/chat/completions \
   -d '{"model":"qwen","messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":512}'
 ```
 
-Follow startup with `docker logs -f qwen38-flash`. Expect: PLE RDMA hello
-(320001536 rows, scale ~1.99e-04), DFlash capture on mid-model aux layers,
-`Graph capturing finished`, then `/health` 200.
+Follow startup with `docker logs -f qwen38-flash`. Expect: PLE mmap graph log (/ple-table-fp8 layer 1, 128 shards,
+320001536 rows, scale ~1.99e-04), DFlash capture, Graph capturing
+finished (PIECEWISE 19/19 + FULL 9/9 + dflash2 9/9), then /health 200.
 
 ## Configuration
 

@@ -32,8 +32,10 @@ COPY src/ple_rdma/ple_rdma.c src/ple_rdma/ple_rdma_graph.c /tmp/
 RUN gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma.c -libverbs -o ${SP}/libple_rdma.so \
  && gcc -O2 -Wall -shared -fPIC /tmp/ple_rdma_graph.c -libverbs -o ${SP}/libple_rdma_graph.so \
  && rm /tmp/ple_rdma*.c
-COPY src/vllm_ple_mmap.py src/vllm_ple_rdma.py src/vllm_ple_rdma_v032.py ${SP}/
-RUN printf '\n\n# --- magi-v3: PLE rows over RDMA (VLLM_PLE_RDMA) ---\nimport sys as _ple_sys\nfrom vllm_ple_rdma_v032 import apply as _ple_rdma_apply\n_ple_rdma_apply(_ple_sys.modules[__name__])\n' \
+COPY src/ple_mmap_graph.c /tmp/
+RUN gcc -O2 -Wall -shared -fPIC -pthread /tmp/ple_mmap_graph.c -o ${SP}/libple_mmap_graph.so && rm /tmp/ple_mmap_graph.c
+COPY src/vllm_ple_mmap.py src/vllm_ple_rdma.py src/vllm_ple_rdma_v032.py src/vllm_ple_mmap_v032.py ${SP}/
+RUN printf '\n\n# --- magi-v3-public: PLE rows over RDMA (or local SSD mmap) (VLLM_PLE_RDMA) ---\nimport sys as _ple_sys\nfrom vllm_ple_rdma_v032 import apply as _ple_rdma_apply\n_ple_rdma_apply(_ple_sys.modules[__name__])\nfrom vllm_ple_mmap_v032 import apply as _ple_mmap_apply\n_ple_mmap_apply(_ple_sys.modules[__name__])\n' \
       >> ${QX}/ngram_embedding.py
 
 # DFlash/DFlash2 target-feature capture (port of the model card's SGLang patch).
