@@ -112,6 +112,8 @@ ple_mg *ple_mg_new(void *rows, void *ids, long cap, int row_bytes,
             if (fstat(fd, &st)) { perror("ple_mmap_graph: fstat"); close(fd); return NULL; }
             void *base = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
             if (base == MAP_FAILED) { perror("ple_mmap_graph: mmap"); close(fd); return NULL; }
+            /* ponytail: random 160B rows — kill fault-around readahead (stolen back from upstream). */
+            madvise(base, st.st_size, MADV_RANDOM);
             close(fd); /* mapping survives close */
             uniq[nuniq] = strdup(p);
             ubase[nuniq] = base;

@@ -17,6 +17,10 @@ PLE_RDMA="${PLE_RDMA:-}"
 TABLE_DIR="${TABLE_DIR:-$HOME/ple-table-fp8}"
 KV_BYTES="${KV_BYTES:-20g}"
 SEQS="${SEQS:-16}"
+CPUSET="${CPUSET:-5-9,15-19}"
+MAMBA_SSM_DTYPE="${MAMBA_SSM_DTYPE:-bfloat16}"
+KV_DTYPE="${KV_DTYPE:-auto}"
+EXTRA="${EXTRA:-}"
 SPEC="${SPEC:-dflash}"
 NSPEC="${NSPEC:-3}"
 PIN_PROMPT="${PIN_PROMPT:-You are \"Magi AI\", a smart home AI (via Home Assistant) and general knowledge assistant.}"
@@ -32,6 +36,25 @@ esac
 
 # PLE source: RDMA (private) or local SSD mmap (public default).
 PLE_ARGS=() PLE_MOUNTS=() PLE_DEVICES=()
+INDEXER_ARGS=()
+case "${KV_DTYPE:-auto}" in
+  fp8*) INDEXER_ARGS=(-e VLLM_INDEXER_FP8=1) ;;
+esac
+# Drafter (sliding attention) cannot do fp8 KV on sm121 (FlashInfer has no
+# fp8 sliding path here); keep it bf16 so its group keeps main-size blocks
+# instead of splintering into 64-token pages that strand the shared pool.
+SKIP_ARGS=()
+case "${KV_DTYPE:-auto}" in
+  fp8*) SKIP_ARGS=(--kv-cache-dtype-skip-layers sliding_window) ;;
+esac
+CPU_ARGS=()
+if [ -n "$CPUSET" ]; then
+  CPU_ARGS=(--cpuset-cpus "$CPUSET")
+fi
+MAMBA_ARGS=()
+if [ -n "$MAMBA_SSM_DTYPE" ]; then
+  MAMBA_ARGS=(--mamba-ssm-cache-dtype "$MAMBA_SSM_DTYPE")
+fi
 if [ -n "$PLE_RDMA" ]; then
   PLE_DEVICES=(--device /dev/infiniband)
   PLE_ARGS=(-e VLLM_PLE_RDMA="$PLE_RDMA" -e VLLM_PLE_RDMA_DEV=roceP2p1s0f0 -e VLLM_PLE_RDMA_GID=auto
@@ -45,9 +68,9 @@ fi
 
 RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
   --gpus all --ipc=host --shm-size 16g -p "$PORT:8000"
-  "${PLE_DEVICES[@]}" --ulimit memlock=-1:-1
+  "${PLE_DEVICES[@]}" "${CPU_ARGS[@]}" --ulimit memlock=-1:-1
   -v "$MODEL_DIR:/model:ro" "${DRAFT_MOUNT[@]}" "${PLE_MOUNTS[@]}"
-  "${PLE_ARGS[@]}"
+  "${PLE_ARGS[@]}" "${INDEXER_ARGS[@]}"
   -e VLLM_FP8_HYBRID=1 -e VLLM_MARLIN_USE_ATOMIC_ADD=1
   -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_FLASHINFER_SAMPLER=1
   "$IMAGE"
@@ -55,8 +78,10 @@ RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
   --load-format fastsafetensors --max-model-len 262144 --max-num-seqs "$SEQS"
   --gpu-memory-utilization 0.01 --kv-cache-memory-bytes "$KV_BYTES"
   --enable-prefix-caching --enable-chunked-prefill --max-num-batched-tokens 8192
-  -cc.cudagraph_mode="${CG_MODE:-FULL_AND_PIECEWISE}" --no-enable-flashinfer-autotune --kv-cache-dtype auto --enable-prompt-tokens-details
+  "${MAMBA_ARGS[@]}"
+  -cc.cudagraph_mode="${CG_MODE:-FULL_AND_PIECEWISE}" --no-enable-flashinfer-autotune --kv-cache-dtype "$KV_DTYPE" "${SKIP_ARGS[@]}" --enable-prompt-tokens-details
   --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3
+  ${EXTRA}
   --never-evict-kv-cache-prompt-includes "$PIN_PROMPT" \
   "${SPEC_ARGS[@]}")
 
