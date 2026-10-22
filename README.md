@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# magi-v3-public: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2 (local SSD)
+# magi-v5-public: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2 (local SSD)
 
 Production serving stack for **Qwen3.8-Flash-Next** on a single NVIDIA DGX
 Spark (GB10). vLLM **0.32.0** with native Qwen4Exp support, **DFlash2**
@@ -124,7 +124,7 @@ Two findings from the same session:
 ## Quick start
 
 ```bash
-git checkout magi-v3-public
+git checkout magi-v5-public
 # weights (~78 GB hybrid) + FP8 PLE table (~49 GB) into ~/models:
 hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid \
   --revision 8b82f0b7abe3d1150a7827d298c75e86267636ae \
