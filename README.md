@@ -56,6 +56,22 @@ Local SSD is consistent with RDMA within noise (~1 tok/s on LongCode).
 Correctness: Reply with OK. gives OK; greedy outputs coherent (wrong PLE
 rows would derail immediately).
 
+FP8 KV investigation (2026-10-22, fixed 20g pool, dflash on): `fp8_e4m3`
+gives 531k tokens vs 688k bf16 (0.77x) - it shrinks the pool despite
+halving attention bytes. Verified causes: (1) the GDN recurrent state
+lives in the pool and does not shrink (f32->bf16 SSM alone: 320k->515k);
+(2) halving attn bytes doubles the block the mamba page forces
+(832->1664, and 1600->3200 with f32 SSM); (3) the DFlash2 drafter
+(sliding attention, no fp8 path on sm121) splinters into a 64-token
+group drawing 4096 blocks/request from the shared pool. Turned off
+(`SPEC=0`), fp8 reaches 1.49M tokens (5.70x) - the drafter, not fp8,
+was the hog. Landed mitigations: default bf16 SSM;
+`--kv-cache-dtype-skip-layers sliding_window` under fp8 (drafter stays
+bf16 at 416-token blocks: 531k->1.10M); compressed-indexer fp8 patch
+(`VLLM_INDEXER_FP8`, +3%, raw indexer stays bf16 for mRoPE positions).
+Verdict: bf16 KV stays the default (quality-verified, benched);
+fp8+skip is the documented 1M-context path (needs YaRN past 262k).
+
 Two findings from the same session:
 
 - **Full-graph vs piecewise graphs are identical within noise**, spec-off and
@@ -71,6 +87,7 @@ Two findings from the same session:
 ## Requirements
 
 - One GB10, ARM64 Linux, Docker + NVIDIA container runtime with unlimited memlock.
+- Container pinned to the X925 perf cores by default (`CPUSET=` to unpin).
 - Local FP8 table dir (default ~/ple-table-fp8, shards 5-37 of the official
   FP8 checkpoint: 128 shards, 320001536 rows). No /dev/infiniband needed.
 - RDMA remains available: set PLE_RDMA to the wtako server (needs RoCE
@@ -107,15 +124,21 @@ MTP path, `SPEC=0` disables speculation.
 |---|---|---|
 | `SPEC` / `NSPEC` | `dflash` / `3` | Speculative method (`mtp`, `dflash`, `0`) and draft tokens |
 | `MODEL_DIR` / `DRAFT_DIR` | shared-storage paths | Target checkpoint / DFlash2 drafter (drafter mounted at `/drafter` only for `dflash`) |
-| `PLE_RDMA` | `192.168.0.1:18515` | Table server; unset reverts to local-table behavior |
+| `PLE_RDMA` | empty | Table server; empty (default) = local SSD mmap |
 | `VLLM_PLE_RDMA_DEV` / `_GID` | `roceP2p1s0f0` / `auto` | RDMA device and GID index |
 | `VLLM_PLE_RDMA_GRAPH` | `1` | `1`: graph-capturable host-func lookup; `0`: Python eager-break path |
 | `CG_MODE` | `FULL_AND_PIECEWISE` | vLLM CUDA-graph mode |
-| `KV_BYTES` / `SEQS` | `18g` / `16` | KV pool bytes / max sequences (18g is the post-OOM value) |
+| `KV_BYTES` / `SEQS` | `20g` / `16` | KV pool bytes / max sequences |
 | `VLLM_FP8_HYBRID` | `1` | INT4 + blockwise-FP8 hybrid dispatch + QSA indexer fix |
 | `PIN_PROMPT` | Magi AI prompt | Marker substring: a request containing it gets its prompt-prefix KV blocks pinned (never evicted, 25% pool cap) |
 | `VLLM_MARLIN_USE_ATOMIC_ADD` | `1` | MoE GEMM backend workaround |
 | `VLLM_USE_DEEP_GEMM` / `VLLM_USE_FLASHINFER_SAMPLER` | `0` / `1` | GEMM and sampler backend selection |
+| `TABLE_DIR` | `~/ple-table-fp8` | Local FP8 table dir, mounted at `/ple-table-fp8` (`VLLM_PLE_MMAP_DIR`) |
+| `CPUSET` | `5-9,15-19` | Docker `--cpuset-cpus`: X925 perf cores; empty = all 20 cores |
+| `MAMBA_SSM_DTYPE` | `bfloat16` | `--mamba-ssm-cache-dtype`: halves the in-pool GDN state; empty = vLLM default (float32) |
+| `KV_DTYPE` | `auto` | `--kv-cache-dtype`: bf16 recommended; `fp8_e4m3` measured below (loses pool on this stack) |
+| `VLLM_PLE_MMAP_WORKERS` / `_CHUNK` / `_PREWARM` | `32` / `2048` / `0` | mmap host-func threads / min rows per thread / page-cache prewarm at load |
+| `EXTRA` | empty | Extra verbatim vLLM flags (e.g. `--block-size 1664`) |
 
 Gotcha: `VLLM_PLE_RDMA_GRAPH=0` with `FULL_*` graphs **crashes graph
 capture** (`Cannot copy between CPU and CUDA tensors … unless pinned`) — the
@@ -126,9 +149,9 @@ Python path forces piecewise, so pair it with `CG_MODE=PIECEWISE`.
 ```text
 INT4 experts + block-FP8 sides + INT8 head (table-stripped hybrid)
              │
-             ├── PLE rows: one-sided RDMA READs from wtako (no local table)
-             │     graph path: ids → pinned host buf → cuLaunchHostFunc READ
-             │     → rows back to GPU, all inside the CUDA graph
+             ├── PLE rows: local SSD mmap via graph host-func (RDMA optional)
+             │     graph path: ids → pinned host buf → cuLaunchHostFunc memcpy
+             │     → rows to GPU, all inside the graph; pthreads, MADV_RANDOM
              ├── DFlash2 drafter ×3, verified by the target (block rejection)
              └── FULL+PIECEWISE graphs + prefix cache + chunked prefill
                          ↓
@@ -140,6 +163,18 @@ INT4 experts + block-FP8 sides + INT8 head (table-stripped hybrid)
   table-less embedding. Failed READs close the dead QP, redial every 2 s and
   retry; the engine stalls meanwhile, never silently wrong rows. Out-of-range
   ids (padding, warm-up garbage) become zero rows.
+- **mmap lookup** (`src/vllm_ple_mmap_v032.py` + `src/ple_mmap_graph.c`
+  -> `libple_mmap_graph.so`). Same host-func pattern as RDMA, `memcpy`
+  from mmap'd safetensors shards instead of READs. Pthread fan-out
+  (`VLLM_PLE_MMAP_WORKERS`, min rows `VLLM_PLE_MMAP_CHUNK`) saturates SSD
+  queue depth on cold faults. Dormant when `VLLM_PLE_RDMA` is set.
+  (A Python prefetch variant was tried and reverted: `.cpu()` cannot
+  survive graph capture, even under `eager_break`.)
+- **Indexer FP8 + drafter compat** (`src/vllm_indexer_fp8.py`, serve-side
+  `VLLM_INDEXER_FP8` + `--kv-cache-dtype-skip-layers sliding_window`
+  under fp8 KV). Compressed indexer cache in fp8; raw indexer stays
+  bf16 (mRoPE positions); drafter kept bf16 (no fp8 sliding path on
+  sm121) at 416-token blocks instead of stranded 64-token pages.
 - **DFlash2 capture** (`src/vllm_qwen4exp_dflash_capture.py`). Ports the model
   card's SGLang patch: completed mid-model layer outputs averaged over the 4
   hyper-connection streams, with vLLM's delayed HC combine materialised for
@@ -158,6 +193,9 @@ INT4 experts + block-FP8 sides + INT8 head (table-stripped hybrid)
 |---|---|
 | [`serve-magi.sh`](serve-magi.sh) | 0.32 launcher (this stack). `SPEC=mtp\|dflash\|0`, `--print` to preview |
 | [`recipe/build/image/Dockerfile.v032`](recipe/build/image/Dockerfile.v032) | Image build: base pin, FLA fixes, hybrid dispatch, RDMA libs, capture + QSA patches, allow-list |
+| [`recipe/build/image/src/ple_mmap_graph.c`](recipe/build/image/src/ple_mmap_graph.c) | mmap host-func (pthread fan-out, MADV_RANDOM) -> `libple_mmap_graph.so` |
+| [`recipe/build/image/src/vllm_ple_mmap_v032.py`](recipe/build/image/src/vllm_ple_mmap_v032.py) | 0.32 mmap embedding (graph path) |
+| [`recipe/build/image/src/vllm_indexer_fp8.py`](recipe/build/image/src/vllm_indexer_fp8.py) | Optional compressed-indexer fp8 (env-gated, off unless KV is fp8) |
 | [`recipe/build/image/src/vllm_ple_rdma_v032.py`](recipe/build/image/src/vllm_ple_rdma_v032.py) | 0.32 RDMA embedding (graph + Python paths) |
 | [`recipe/build/image/src/ple_rdma/`](recipe/build/image/src/ple_rdma/) | `ple_rdma.c` (shared READ helper) + `ple_rdma_graph.c` (host-func) |
 | [`recipe/build/image/src/vllm_qwen4exp_dflash_capture.py`](recipe/build/image/src/vllm_qwen4exp_dflash_capture.py) | DFlash2 target-feature capture |
