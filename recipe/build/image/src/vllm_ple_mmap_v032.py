@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""PLE n-gram table from local SSD via mmap + CUDA host func (vLLM 0.32) — magi-v3-public.
+"""PLE n-gram table from local SSD via mmap + CUDA host func (vLLM 0.32) — magi-v5-public.
 
 Same graph-capturable pattern as vllm_ple_rdma_v032.py, but rows come from
 local safetensors shards (~/ple-table-fp8: layer 1, 128 x 2500012 x 160 B)

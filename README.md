@@ -40,7 +40,7 @@ numbers; they do not apply to this stack.
 | LongCode (2048 tok) | ~30.9 | 70–71 |
 
 2026-10-23, same 5 prompts via bench_qwen35.sh x3 against
-magi-v3-public (local SSD, DFlash2 x3). First pass ignored (cold page
+magi-v5-public (local SSD, DFlash2 x3). First pass ignored (cold page
 cache: Q&A 44.5, Code 58.5, JSON 63.9, LongCode 64.9); steady-state
 passes 2–3, 4 runs each:
 

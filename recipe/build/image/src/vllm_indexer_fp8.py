@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen4Exp indexer compressed-KV dtype policy (magi-v3-public).
+"""Qwen4Exp indexer compressed-KV dtype policy (magi-v5-public).
 
 The compressed indexer cache SHOULD match the main KV dtype: under fp8 KV
 a bf16 compressed cache splinters the KV groups (extra 64-token-style

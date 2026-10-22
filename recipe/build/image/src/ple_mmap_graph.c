@@ -1,4 +1,4 @@
-/* ple_mmap_graph.c — CUDA-graph-capturable local SSD PLE row source (magi-v3-public).
+/* ple_mmap_graph.c — CUDA-graph-capturable local SSD PLE row source (magi-v5-public).
  *
  * Same host-func pattern as ple_rdma_graph.c, but rows come from mmap'd
  * local safetensors shards instead of RDMA READs: the GPU copies n-gram ids
