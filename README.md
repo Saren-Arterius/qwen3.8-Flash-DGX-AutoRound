@@ -138,7 +138,7 @@ hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 \
 # SPEC=mtp with an MTP-grafted checkpoint), or point DRAFT_DIR at
 # your own drafter.
 cd recipe/build/image
-docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-public .
+docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v5 .
 cd ../../..
 bash serve-magi.sh --print   # inspect the docker command
 bash serve-magi.sh           # start qwen38-flash on :8000 (detached)
