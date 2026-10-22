@@ -125,6 +125,18 @@ Two findings from the same session:
 
 ```bash
 git checkout magi-v3-public
+# weights (~78 GB hybrid) + FP8 PLE table (~49 GB) into ~/models:
+hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid \
+  --revision 8b82f0b7abe3d1150a7827d298c75e86267636ae \
+  --local-dir ~/models/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid
+hf download Saren/Qwen3.8-Flash-Next-ple-table-fp8 \
+  --revision 50511b0a41aa1d34b8beb7e5d4bb06a0b650dc14 \
+  --local-dir ~/models/ple-table-fp8
+# (or: bash recipe/tools/fetch-ple-table-fp8.sh ~/models/ple-table-fp8
+#  for the table straight from the official Qwen FP8 checkpoint)
+# No public standalone DFlash2 drafter exists: serve with SPEC=0 (or
+# SPEC=mtp with an MTP-grafted checkpoint), or point DRAFT_DIR at
+# your own drafter.
 cd recipe/build/image
 docker build -f Dockerfile.v032 -t qwen38-flash-dgx:magi-v3-public .
 cd ../../..
@@ -159,7 +171,7 @@ MTP path, `SPEC=0` disables speculation.
 | `PIN_PROMPT` | Magi AI prompt | Marker substring: a request containing it gets its prompt-prefix KV blocks pinned (never evicted, 25% pool cap) |
 | `VLLM_MARLIN_USE_ATOMIC_ADD` | `1` | MoE GEMM backend workaround |
 | `VLLM_USE_DEEP_GEMM` / `VLLM_USE_FLASHINFER_SAMPLER` | `0` / `1` | GEMM and sampler backend selection |
-| `TABLE_DIR` | `~/ple-table-fp8` | Local FP8 table dir, mounted at `/ple-table-fp8` (`VLLM_PLE_MMAP_DIR`) |
+| `MODELS_ROOT` / `MODEL_DIR` / `DRAFT_DIR` / `TABLE_DIR` | `~/models` (+ names above) | Override any single one; the launcher fails fast if `dflash` has no drafter |
 | `CPUSET` | `5-9,15-19` | Docker `--cpuset-cpus`: X925 perf cores; empty = all 20 cores |
 | `MAMBA_SSM_DTYPE` | `bfloat16` | `--mamba-ssm-cache-dtype`: halves the in-pool GDN state; empty = vLLM default (float32) |
 | `KV_DTYPE` | `auto` | `--kv-cache-dtype`: bf16 recommended; `fp8_e4m3` measured below (loses pool on this stack) |
