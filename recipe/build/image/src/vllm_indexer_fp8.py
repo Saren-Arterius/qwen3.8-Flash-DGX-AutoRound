@@ -1,21 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Force the Qwen4Exp indexer COMPRESSED key cache to fp8 (magi-v3-public).
+"""Qwen4Exp indexer compressed-KV dtype policy (magi-v3-public).
 
-Upstream `AttentionConfig.indexer_kv_dtype` defaults to "auto", which the QSA
-indexer resolves to "bf16" — so even with `--kv-cache-dtype fp8_e4m3` the
-compressed indexer copy stays bf16. The kernels already support e4m3
-(RMSNormed before quantization, fp8xfp8 dot, no scales), but there is no CLI
-flag; this flips the resolver instead.
+The compressed indexer cache SHOULD match the main KV dtype: under fp8 KV
+a bf16 compressed cache splinters the KV groups (extra 64-token-style
+group, stranded pool). But the raw indexer cache must stay bf16 always
+(it packs int64 mRoPE positions into bf16 cells).
 
-`raw_key_cache` is deliberately untouched: it packs int64 mRoPE positions
-into bf16 cells, and quantizing it destroys position bits.
+Policy (evaluated at indexer construction, i.e. boot time):
+- VLLM_INDEXER_FP8=1  -> fp8, always (explicit opt-in).
+- VLLM_INDEXER_FP8=0  -> bf16, always (explicit opt-out / skip).
+- unset               -> follow KV_DTYPE: fp8* implies fp8, else bf16.
+  (serve-magi.sh exports KV_DTYPE into the container, so fp8 KV
+  automatically requires the fp8 indexer; normal KV stays skippable.)
 
-Gated on VLLM_INDEXER_FP8=1 (serve-magi.sh sets it when KV_DTYPE=fp8*).
-Dormant otherwise: explicit non-bf16 resolutions (e.g. mxfp4) pass through.
+Non-fp8 resolutions (e.g. an explicit mxfp4 config) always pass through.
 """
 from __future__ import annotations
 
 import os
+
+
+def _want_fp8() -> bool:
+    override = os.environ.get("VLLM_INDEXER_FP8")
+    if override == "1":
+        return True
+    if override == "0":
+        return False
+    return str(os.environ.get("KV_DTYPE", "auto")).startswith("fp8")
 
 
 def apply() -> None:
@@ -32,7 +43,7 @@ def apply() -> None:
             r = orig(self, default)
         except TypeError:
             r = orig(self)
-        if os.environ.get("VLLM_INDEXER_FP8") == "1" and r == "bf16":
+        if r == "bf16" and _want_fp8():
             return "fp8"
         return r
 

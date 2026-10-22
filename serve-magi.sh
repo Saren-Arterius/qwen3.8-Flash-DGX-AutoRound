@@ -96,7 +96,7 @@ RUN=(docker run -d --name "$NAME" --restart "${RESTART:-unless-stopped}"
   --gpus all --ipc=host --shm-size 16g -p "$PORT:8000"
   "${PLE_DEVICES[@]}" "${CPU_ARGS[@]}" --ulimit memlock=-1:-1
   -v "$MODEL_DIR:/model:ro" "${DRAFT_MOUNT[@]}" "${PLE_MOUNTS[@]}"
-  "${PLE_ARGS[@]}" "${INDEXER_ARGS[@]}"
+  "${PLE_ARGS[@]}" "${INDEXER_ARGS[@]}" -e KV_DTYPE="$KV_DTYPE"
   -e VLLM_FP8_HYBRID=1 -e VLLM_MARLIN_USE_ATOMIC_ADD=1
   -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_FLASHINFER_SAMPLER=1
   "$IMAGE"
