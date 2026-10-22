@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# magi-v3-public on vLLM 0.32.0 — SSD mmap default, RDMA optional.
-# Same stack as magi-v3 (Qwen4Exp + DFlash2, FULL_AND_PIECEWISE), but the
-# PLE n-gram table comes from local SSD (/ple-table-fp8) unless PLE_RDMA
-# is set. Based on serve-magi.sh.
+# magi-v5 on vLLM 0.32.0 — private RDMA serving (NAS paths default).
+# Same stack as magi-v5-public (Qwen4Exp + DFlash2, FULL_AND_PIECEWISE);
+# PLE rows come over RDMA unless PLE_RDMA is unset (then local SSD table).
 # Usage: serve-magi.sh [--print]
 #
 # 1M KV cache (pool must hold the request): fp8 cache at 20g or more.

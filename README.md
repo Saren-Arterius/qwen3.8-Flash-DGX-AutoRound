@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# magi-v3-public: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2 (local SSD)
+# magi-v5: Qwen3.8-Flash-Next serving on vLLM 0.32 + DFlash2 (private RDMA)
 
 Production serving stack for **Qwen3.8-Flash-Next** on a single NVIDIA DGX
 Spark (GB10). vLLM **0.32.0** with native Qwen4Exp support, **DFlash2**
@@ -19,7 +19,7 @@ numbers; they do not apply to this stack.
 | Piece | Value |
 |---|---|
 | Base image | `vllm/vllm-openai:v0.32.0` (pinned sha256, see `Dockerfile.v032`) |
-| Built image | `qwen38-flash-dgx:magi-v3-public` |
+| Built image | `qwen38-flash-dgx:magi-v5` |
 | Target checkpoint | `Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid`, table-stripped GPTQ: INT4 routed experts, blockwise-FP8 side layers, INT8 `lm_head` |
 | Drafter | `Qwen3.8-Flash-Next-DFlash2` (vLLM native `dflash`, EAGLE3-style) |
 | Context / KV / streams | 262144 tokens, `KV_BYTES=20g`, `SEQS=16`, prefix cache + chunked prefill on |
@@ -40,7 +40,7 @@ numbers; they do not apply to this stack.
 | LongCode (2048 tok) | ~30.9 | 70–71 |
 
 2026-10-23, same 5 prompts via bench_qwen35.sh x3 against
-magi-v3-public (local SSD, DFlash2 x3). First pass ignored (cold page
+magi-v5-public (local SSD, DFlash2 x3). First pass ignored (cold page
 cache: Q&A 44.5, Code 58.5, JSON 63.9, LongCode 64.9); steady-state
 passes 2–3, 4 runs each:
 
@@ -124,7 +124,7 @@ Two findings from the same session:
 ## Quick start
 
 ```bash
-git checkout magi-v3-public
+git checkout magi-v5
 # weights (~78 GB hybrid) + FP8 PLE table (~49 GB) into ~/models:
 hf download Saren/Qwen3.8-Flash-Next-W4A16-AutoRound-hybrid \
   --revision 8b82f0b7abe3d1150a7827d298c75e86267636ae \
